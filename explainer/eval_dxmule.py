@@ -10,8 +10,10 @@ Example (CPU smoke, not a benchmark):
         --device -1 --epochs 1 --batch_size 4 --max_graphs 8
 
 ``--max_graphs`` truncates the split so a machine can check that the path
-runs. ROC-AUC on that subset is a sanity log. Fidelity (ACC@p, deletion)
-is not computed.
+runs. ROC-AUC on that subset is a sanity log. ACC@p and Fidelity+/-@p are
+logged from ``dxmule.fidelity`` on the hard retention masks. Sufficiency
+and necessity in any other formula, and complement-deletion curves beyond
+Fidelity+@p, are not a separate protocol.
 """
 
 from __future__ import annotations
@@ -38,6 +40,12 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from dxmule.explainer import DXMulE
+from dxmule.fidelity import (
+    DEFINITION,
+    FidelityAccumulator,
+    edge_mask_affects_logits,
+    score_hard_mask,
+)
 from dxmule.scales import parse_scales
 
 
@@ -313,6 +321,8 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str, smoke: bool 
         )
         if not np.isfinite(averaged["loss"]):
             raise RuntimeError("DXMulE loss is not finite. Stopped before evaluation.")
+    elapsed = time.perf_counter() - started
+    logging.info("Train loop seconds: %.3f", elapsed)
     if smoke:
         grad_finite, grad_nonzero, grad_abs = _grad_flow(explainer.algorithm)
         logging.info(
@@ -321,49 +331,60 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str, smoke: bool 
             grad_nonzero,
             grad_abs,
         )
-        logging.info("SMOKE train loop seconds: %.3f", time.perf_counter() - started)
+        logging.info("SMOKE train loop seconds: %.3f", elapsed)
     return history
 
 
-def _safe_auc(labels, scores) -> float | None:
+def _auc_status(labels, scores) -> tuple[str, float | None]:
     labels = np.asarray(labels).astype(int)
     scores = np.asarray(scores, dtype=float)
     if labels.min() == labels.max():
-        return None
+        return "constant_labels", None
     if np.allclose(scores, scores[0]):
-        return None
-    return float(roc_auc_score(labels, scores))
+        return "constant_scores", None
+    return "ok", float(roc_auc_score(labels, scores))
 
 
 def evaluate_dxmule(explainer, test_loader, device: str):
-    """Shared-score ROC-AUC, plus hard-mask precision and recall at each k.
+    """Shared-score ROC-AUC, hard-mask precision and recall, and fidelity.
 
     Soft retention masks are strictly increasing functions of the same logits,
     so they induce the same edge ranking and the same ROC-AUC. Per-scale
-    numbers below are the hard top-k subgraph against the ground-truth edges.
-
-    TODO: fidelity ACC@p, sufficiency/necessity, and complement-deletion
-    curves are not implemented. These logs are a smoke check.
+    precision and recall compare the hard top-k subgraph to ground-truth edges.
+    ACC@p and Fidelity+/-@p use those same hard masks against the frozen GNN.
+    A constant ground-truth edge label, or a constant explanation score, is
+    left out of ROC-AUC and counted separately. Recall is averaged only over
+    graphs with at least one positive ground-truth edge.
     """
     ratios = explainer.algorithm.retention.ks
     shared_aucs = []
+    n_const_label = 0
+    n_const_score = 0
     per_scale = {
         k: {"precision": [], "recall": [], "retention": []} for k in ratios
     }
+    fidelity = FidelityAccumulator(ratios)
+    mask_ok = None
     model = explainer.model
     model.eval()
     n_nested = 0
 
     with torch.no_grad():
-        for data in test_loader:
+        for idx, data in enumerate(test_loader):
             data = data.to(device)
             target = model(data.x, data.edge_index, data.batch)
             explanation = explainer(
                 data.x, data.edge_index, target=target, batch=data.batch
             )
             labels = data.edge_mask.detach().float().cpu()
-            shared = _safe_auc(labels.tolist(), explanation.edge_mask.detach().cpu().tolist())
-            if shared is not None:
+            status, shared = _auc_status(
+                labels.tolist(), explanation.edge_mask.detach().cpu().tolist()
+            )
+            if status == "constant_labels":
+                n_const_label += 1
+            elif status == "constant_scores":
+                n_const_score += 1
+            elif shared is not None:
                 shared_aucs.append(shared)
 
             hard = explanation.scale_hard_masks.detach().cpu()
@@ -392,26 +413,79 @@ def evaluate_dxmule(explainer, test_loader, device: str):
                     hits / n_positive if n_positive else float("nan")
                 )
 
+            if mask_ok is False:
+                continue
+            if mask_ok is None:
+                mask_ok = bool(edge_mask_affects_logits(
+                    model, data.x, data.edge_index, data.batch
+                ))
+                logging.info("FIDELITY mask_sensitivity=%s graph_index=%s", mask_ok, idx)
+                if not mask_ok:
+                    continue
+            if data.edge_index.size(1) == 0:
+                fidelity.skipped_no_edges += 1
+                continue
+            for row, ratio in enumerate(fidelity.ratios):
+                stats = score_hard_mask(
+                    model, data.x, data.edge_index, data.batch, target, hard[row]
+                )
+                if stats is None:
+                    fidelity.skipped_no_edges += 1
+                    break
+                fidelity.add(ratio, stats)
+
     def _mean(values: list[float]) -> float:
         finite = [v for v in values if np.isfinite(v)]
         if not finite:
             return float("nan")
         return float(np.mean(finite))
 
+    def _finite_count(values: list[float]) -> int:
+        return sum(1 for value in values if np.isfinite(value))
+
     logging.info(
         "Hard retention masks nested: True (n=%s graphs). "
         "A violation raises before this line.",
         n_nested,
     )
+    if shared_aucs:
+        arr = np.asarray(shared_aucs, dtype=float)
+        logging.info(
+            "ROC-AUC summary mean=%.6f std_ddof0=%.6f min=%.6f max=%.6f n=%s",
+            float(arr.mean()),
+            float(arr.std(ddof=0)),
+            float(arr.min()),
+            float(arr.max()),
+            len(shared_aucs),
+        )
+    else:
+        logging.info("ROC-AUC summary mean=nan std_ddof0=nan min=nan max=nan n=0")
+    logging.info(
+        "AUC skipped_constant_labels=%s skipped_constant_scores=%s scored=%s",
+        n_const_label,
+        n_const_score,
+        len(shared_aucs),
+    )
     logging.info(
         "Shared-score ROC-AUC %.4f (n=%s) values=%s. Soft masks reuse this ranking, "
-        "so they are not scored separately. TODO: fidelity protocol is unfinished.",
+        "so they are not scored separately.",
         _mean(shared_aucs),
         len(shared_aucs),
         [round(float(a), 4) for a in shared_aucs],
     )
     for ratio in ratios:
         bucket = per_scale[ratio]
+        logging.info(
+            "Hard retention summary k=%.2f realized=%.6f precision=%.6f recall=%.6f "
+            "n_retention=%s n_precision=%s n_recall=%s",
+            ratio,
+            _mean(bucket["retention"]),
+            _mean(bucket["precision"]),
+            _mean(bucket["recall"]),
+            len(bucket["retention"]),
+            _finite_count(bucket["precision"]),
+            _finite_count(bucket["recall"]),
+        )
         logging.info(
             "Hard retention k=%.2f realized %.3f precision %.3f recall %.3f (n=%s)",
             ratio,
@@ -420,6 +494,23 @@ def evaluate_dxmule(explainer, test_loader, device: str):
             _mean(bucket["recall"]),
             len(bucket["retention"]),
         )
+    if mask_ok is not True:
+        logging.info("FIDELITY status=UNKNOWN")
+        logging.info(
+            "FIDELITY gap: an all-zero edge mask did not change GNN logits "
+            "relative to an all-one mask on the checked test graph, so ACC@p "
+            "and Fidelity@p were not computed."
+        )
+    else:
+        logging.info("FIDELITY status=OK")
+        logging.info("FIDELITY definition: %s", DEFINITION)
+        logging.info(
+            "FIDELITY skipped_no_edges=%s skipped_nonfinite=%s",
+            fidelity.skipped_no_edges,
+            fidelity.skipped_nonfinite,
+        )
+        for line in fidelity.lines():
+            logging.info("%s", line)
     return {"shared_auc": shared_aucs, "per_scale": per_scale}
 
 
@@ -463,6 +554,31 @@ def main():
     device = resolve_device(args.device)
     scales = parse_scales(args.scales)
     logging.info("Device %s root %s scales %s", device, root, scales)
+    if args.device >= 0 and device == "cpu":
+        logging.info(
+            "Requested GPU device %s but CUDA is unavailable. Using CPU.",
+            args.device,
+        )
+    logging.info(
+        "PROTOCOL dataset=%s epochs=%s lr=%s batch_size=%s seed=%s "
+        "codebook_size=%s use_ckpt=%s max_graphs=%s scales=%s "
+        "cross_scale_weight=%s complement_weight=%s shell_weight=%s "
+        "retention_temperature=%s device=%s",
+        args.dataset,
+        args.epochs,
+        args.lr,
+        args.batch_size,
+        args.seed,
+        args.codebook_size,
+        args.use_ckpt,
+        args.max_graphs,
+        scales,
+        args.cross_scale_weight,
+        args.complement_weight,
+        args.shell_weight,
+        args.retention_temperature,
+        device,
+    )
     if args.max_graphs is not None:
         logging.info(
             "max_graphs=%s truncates the split. Losses and AUC below are a smoke check.",
@@ -561,7 +677,9 @@ def main():
         device,
         smoke=args.max_graphs is not None,
     )
+    eval_started = time.perf_counter()
     evaluate_dxmule(explainer, test_loader, device)
+    logging.info("Evaluate seconds: %.3f", time.perf_counter() - eval_started)
 
 
 if __name__ == "__main__":
