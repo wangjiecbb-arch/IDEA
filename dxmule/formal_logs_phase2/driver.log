@@ -1,0 +1,43 @@
+pickle present: data/benzene_with_gt.pkl (57357301 bytes)
+=== test_core ===
+...........................
+----------------------------------------------------------------------
+Ran 27 tests in 0.051s
+
+OK
+ELAPSED_SEC 148.196
+EXIT 0
+ELAPSED_SEC 538.972
+EXIT 0
+MATCHED_RULE Matched-subset ROC-AUC uses one shared skip rule for both methods. A test graph is excluded for BOTH methods when any of the following holds: the ground-truth edge_mask is constant on that graph; IDEA explanation scores are constant on that graph; DXMulE explanation scores are constant on that graph; or either score vector is non-finite or empty. Explanation scores are the sigmoid edge masks from each explainer (strictly increasing in that method's edge logit). Constant means numpy.allclose of every score to the first score. The kept indices are the intersection, so n is the same for both means. ACC@p and Fidelity+/-@p stay on the full test loader and are not filtered here.
+MATCHED seed=2025 n=1745 idea_mean=0.165881 idea_std_ddof0=0.165700 idea_min=0.000000 idea_max=0.916667 dxmule_mean=0.719087 dxmule_std_ddof0=0.110858 dxmule_min=0.494048 dxmule_max=1.000000
+MATCHED_SKIP n_test=3600 constant_label=1762 idea_only_constant_score=5 dxmule_only_constant_score=88 both_constant_score=0 nonfinite_or_empty=0 matched=1745
+MATCHED_EQUAL_N idea=1745 dxmule=1745
+MATCHED_INCLUSION idea_own_rule_n=1838 dxmule_own_rule_n=1750 matched_n=1745
+ELAPSED_SEC 148.224
+EXIT 0
+ELAPSED_SEC 552.456
+EXIT 0
+MATCHED_RULE Matched-subset ROC-AUC uses one shared skip rule for both methods. A test graph is excluded for BOTH methods when any of the following holds: the ground-truth edge_mask is constant on that graph; IDEA explanation scores are constant on that graph; DXMulE explanation scores are constant on that graph; or either score vector is non-finite or empty. Explanation scores are the sigmoid edge masks from each explainer (strictly increasing in that method's edge logit). Constant means numpy.allclose of every score to the first score. The kept indices are the intersection, so n is the same for both means. ACC@p and Fidelity+/-@p stay on the full test loader and are not filtered here.
+MATCHED seed=2026 n=1736 idea_mean=0.142173 idea_std_ddof0=0.162031 idea_min=0.000000 idea_max=0.916667 dxmule_mean=0.715131 dxmule_std_ddof0=0.110057 dxmule_min=0.494048 dxmule_max=1.000000
+MATCHED_SKIP n_test=3600 constant_label=1762 idea_only_constant_score=8 dxmule_only_constant_score=94 both_constant_score=0 nonfinite_or_empty=0 matched=1736
+MATCHED_EQUAL_N idea=1736 dxmule=1736
+MATCHED_INCLUSION idea_own_rule_n=1838 dxmule_own_rule_n=1744 matched_n=1736
+ELAPSED_SEC 151.350
+EXIT 0
+ELAPSED_SEC 936.608
+EXIT 0
+MATCHED_RULE Matched-subset ROC-AUC uses one shared skip rule for both methods. A test graph is excluded for BOTH methods when any of the following holds: the ground-truth edge_mask is constant on that graph; IDEA explanation scores are constant on that graph; DXMulE explanation scores are constant on that graph; or either score vector is non-finite or empty. Explanation scores are the sigmoid edge masks from each explainer (strictly increasing in that method's edge logit). Constant means numpy.allclose of every score to the first score. The kept indices are the intersection, so n is the same for both means. ACC@p and Fidelity+/-@p stay on the full test loader and are not filtered here.
+MATCHED seed=2027 n=1729 idea_mean=0.195770 idea_std_ddof0=0.174452 idea_min=0.000000 idea_max=0.944444 dxmule_mean=0.707085 dxmule_std_ddof0=0.108692 dxmule_min=0.511905 dxmule_max=1.000000
+MATCHED_SKIP n_test=3600 constant_label=1762 idea_only_constant_score=4 dxmule_only_constant_score=104 both_constant_score=1 nonfinite_or_empty=0 matched=1729
+MATCHED_EQUAL_N idea=1729 dxmule=1729
+MATCHED_INCLUSION idea_own_rule_n=1838 dxmule_own_rule_n=1733 matched_n=1729
+MATCHED_ACROSS n_seeds=3 seeds=2025,2026,2027 aggregation=unweighted_mean_of_per_seed_means std=ddof1
+MATCHED_ACROSS idea_mean=0.167941 idea_std_ddof1=0.026858 dxmule_mean=0.713768 dxmule_std_ddof1=0.006116
+MATCHED_ACROSS per_seed_n=2025:1745,2026:1736,2027:1729
+MATCHED_ACROSS per_seed_idea_mean=2025:0.165881,2026:0.142173,2027:0.195770
+MATCHED_ACROSS per_seed_dxmule_mean=2025:0.719087,2026:0.715131,2027:0.707085
+MATCHED_ACROSS note=Across-seed std is the sample standard deviation (ddof=1) of the per-seed means. It is omitted when only one seed is present. Seeds are not pooled into one graph multiset. This is not a significance test and it is not a claim that one method is better.
+HYPOTHESIS PENDING_RESULT. Loss is not comparable across methods. Do not rank methods from these logs.
+Logs: dxmule/formal_logs_phase2/
+DRIVER_EXIT:0

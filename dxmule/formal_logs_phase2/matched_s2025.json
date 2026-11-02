@@ -1,0 +1,35 @@
+{
+  "dataset": "Benzene",
+  "dxmule": {
+    "max": 1.0,
+    "mean": 0.7190865185152102,
+    "min": 0.49404761904761907,
+    "n": 1745,
+    "std_ddof0": 0.11085826248452875
+  },
+  "equal_n": true,
+  "idea": {
+    "max": 0.9166666666666667,
+    "mean": 0.1658810527244648,
+    "min": 0.0,
+    "n": 1745,
+    "std_ddof0": 0.16570020908512378
+  },
+  "inclusion": {
+    "dxmule_own_rule_n": 1750,
+    "idea_own_rule_n": 1838,
+    "matched_n": 1745,
+    "note": "idea_own_rule_n scores every mixed-label graph with finite scores, including graphs whose IDEA scores are constant. dxmule_own_rule_n also drops graphs whose DXMulE scores are constant. Those two counts can differ. The fair means use matched_n only."
+  },
+  "n": 1745,
+  "n_test": 3600,
+  "rule": "Matched-subset ROC-AUC uses one shared skip rule for both methods. A test graph is excluded for BOTH methods when any of the following holds: the ground-truth edge_mask is constant on that graph; IDEA explanation scores are constant on that graph; DXMulE explanation scores are constant on that graph; or either score vector is non-finite or empty. Explanation scores are the sigmoid edge masks from each explainer (strictly increasing in that method's edge logit). Constant means numpy.allclose of every score to the first score. The kept indices are the intersection, so n is the same for both means. ACC@p and Fidelity+/-@p stay on the full test loader and are not filtered here.",
+  "seed": 2025,
+  "skips": {
+    "both_constant_score": 0,
+    "constant_label": 1762,
+    "dxmule_only_constant_score": 88,
+    "idea_only_constant_score": 5,
+    "nonfinite_or_empty": 0
+  }
+}
