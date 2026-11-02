@@ -17,11 +17,20 @@ sys.path.append(parent_dir)
 
 from torch_geometric.loader import DataLoader
 from torch_geometric.explain import Explainer
+from torch_geometric.explain.algorithm.utils import clear_masks
 from torch_geometric.nn import global_mean_pool
 
 from gnn_model import *
 from idea import Idea
 from sklearn.metrics import roc_auc_score
+
+from dxmule.fidelity import (
+    DEFINITION,
+    FidelityAccumulator,
+    edge_mask_affects_logits,
+    score_hard_mask,
+)
+from dxmule.scales import edge_graph_ids, hard_retention_mask, parse_scales
 
 def topk_mask_py(lst, k):
     if k <= 0:
@@ -133,6 +142,10 @@ def train_explainer(explainer, train_loader, epochs = 20,
                         f"- Time: {time() - start_time:.2f}s")
         losses.append(avg_loss['rqvae_loss'])
 
+    logging.info(
+        "Train loop seconds: %.3f (includes unmasked embedding precompute)",
+        time() - start_time,
+    )
     if smoke:
         grad_finite, grad_nonzero, grad_abs = _grad_flow(explainer.algorithm)
         logging.info(
@@ -143,33 +156,107 @@ def train_explainer(explainer, train_loader, epochs = 20,
         )
     return losses
 
-def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None, dataset = None):
+def _log_fidelity(fidelity, mask_ok):
+    if fidelity is None or mask_ok is not True:
+        logging.info("FIDELITY status=UNKNOWN")
+        if fidelity is None:
+            logging.info("FIDELITY gap: no fidelity ratios were set, so ACC@p was not computed.")
+        else:
+            logging.info(
+                "FIDELITY gap: an all-zero edge mask did not change GNN logits "
+                "relative to an all-one mask on the checked test graph, so "
+                "ACC@p and Fidelity@p were not computed."
+            )
+        return
+    logging.info("FIDELITY status=OK")
+    logging.info("FIDELITY definition: %s", DEFINITION)
+    logging.info(
+        "FIDELITY skipped_no_edges=%s skipped_nonfinite=%s",
+        fidelity.skipped_no_edges,
+        fidelity.skipped_nonfinite,
+    )
+    for line in fidelity.lines():
+        logging.info("%s", line)
+
+
+def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None, dataset = None,
+                       fidelity_ratios=()):
     results = {
         'roc_auc': [],
     }
-    
+    skipped_constant_labels = 0
+    fidelity = FidelityAccumulator(fidelity_ratios) if fidelity_ratios else None
+    mask_ok = None
+    model.eval()
+
     with torch.no_grad():
         for idx, data in enumerate(tqdm(test_loader, desc = "Processing Test Data", ncols = 80)):
             data = data.to(device)
-            graph_embedding = explainer.model.embedding(data.x, data.edge_index)
-            graph_embedding = global_mean_pool(graph_embedding, data.batch)
+            clear_masks(model)
             target = explainer.model(data.x, data.edge_index, data.batch)
             exp = explainer(data.x, data.edge_index, target = target, batch = data.batch)
-            
+
             same = (data.edge_mask == data.edge_mask[0]).all().item()
-            if not same:
+            if same:
+                skipped_constant_labels += 1
+            else:
                 auc = roc_auc_score(data.edge_mask.int().tolist(), exp.edge_mask.cpu().tolist())
                 results['roc_auc'].append(auc)
-    
+
+            if fidelity is None or mask_ok is False:
+                continue
+            scores = exp.edge_mask.detach()
+            if scores.numel() == 0 or not torch.isfinite(scores).all():
+                fidelity.skipped_nonfinite += 1
+                continue
+            if mask_ok is None:
+                mask_ok = bool(edge_mask_affects_logits(
+                    model, data.x, data.edge_index, data.batch
+                ))
+                logging.info("FIDELITY mask_sensitivity=%s graph_index=%s", mask_ok, idx)
+                if not mask_ok:
+                    continue
+            if data.edge_index.size(1) == 0:
+                fidelity.skipped_no_edges += 1
+                continue
+            edge_batch = edge_graph_ids(data.edge_index, data.batch, data.x.size(0))
+            for ratio in fidelity.ratios:
+                hard = hard_retention_mask(scores, edge_batch, ratio)
+                stats = score_hard_mask(
+                    model, data.x, data.edge_index, data.batch, target, hard
+                )
+                if stats is None:
+                    fidelity.skipped_no_edges += 1
+                    break
+                fidelity.add(ratio, stats)
+
     aucs = results['roc_auc']
     auc_mean = float(np.mean(aucs)) if aucs else float("nan")
+    if aucs:
+        arr = np.asarray(aucs, dtype=float)
+        logging.info(
+            "ROC-AUC summary mean=%.6f std_ddof0=%.6f min=%.6f max=%.6f n=%s",
+            float(arr.mean()),
+            float(arr.std(ddof=0)),
+            float(arr.min()),
+            float(arr.max()),
+            len(aucs),
+        )
+    else:
+        logging.info("ROC-AUC summary mean=nan std_ddof0=nan min=nan max=nan n=0")
+    logging.info(
+        "AUC skipped_constant_labels=%s scored=%s",
+        skipped_constant_labels,
+        len(aucs),
+    )
     logging.info(
         "Evaluation Results - ROC AUC: %.4f (n=%s) values=%s",
         auc_mean,
         len(aucs),
         [round(float(a), 4) for a in aucs],
     )
-    
+    _log_fidelity(fidelity, mask_ok)
+
     return results
 
 def main():
@@ -193,6 +280,13 @@ def main():
         help="If set, truncate train/test the same way as explainer/eval_dxmule.py. "
              "Metrics are a smoke check, not a benchmark.",
     )
+    parser.add_argument(
+        "--fidelity_scales",
+        type=str,
+        default="0.1,0.3,0.5,0.7,0.9",
+        help="Hard top-p grid for ACC@p and Fidelity+/-@p. "
+             "Independent of DXMulE retention. Empty is not allowed.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -202,13 +296,33 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    # if args.device >= 0 and torch.cuda.is_available():
-    #     device = f'cuda:{args.device}'
-    if args.device >= 0 and torch.backends.mps.is_available():
-        device = 'mps'
+    if args.device >= 0 and torch.cuda.is_available():
+        device = f"cuda:{args.device}"
+    elif args.device >= 0 and torch.backends.mps.is_available():
+        device = "mps"
     else:
-        device = 'cpu'
+        device = "cpu"
+        if args.device >= 0:
+            logging.info(
+                "Requested GPU device %s but CUDA and MPS are unavailable. Using CPU.",
+                args.device,
+            )
     logging.info(f"Using device: {device}")
+    fidelity_ratios = tuple(sorted(set(parse_scales(args.fidelity_scales))))
+    logging.info(
+        "PROTOCOL dataset=%s epochs=%s lr=%s batch_size=%s seed=%s "
+        "codebook_size=%s use_ckpt=%s max_graphs=%s fidelity_scales=%s device=%s",
+        args.dataset,
+        args.epochs,
+        args.lr,
+        args.batch_size,
+        args.seed,
+        args.codebook_size,
+        args.use_ckpt,
+        args.max_graphs,
+        fidelity_ratios,
+        device,
+    )
 
     if args.dataset == "Mutag":
         dataset = get_dataset(args.dataset, args.root_path)
@@ -267,7 +381,7 @@ def main():
     test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
 
     explained_model = init_model(args.dataset, args.root_path, device)
-    logging.info(f"Loaded pretrained GNN from model {args.root_path + f'models/{args.dataset}.pt'}")
+    logging.info("Loaded pretrained GNN from %s", args.root_path + f"GNN/{args.dataset}.pth")
 
     model_config = {
         'mode': "multiclass_classification" if num_classes > 2 else "binary_classification",
@@ -371,12 +485,15 @@ def main():
                         device = device,
                         smoke = args.max_graphs is not None,
     )
+    eval_started = time()
     _ = evaluate_explainer(explainer,
                                     test_loader,
                                     explained_model,
                                     device = device,
                                     gt_mask = True,
-                                    dataset = args.dataset)
+                                    dataset = args.dataset,
+                                    fidelity_ratios = fidelity_ratios)
+    logging.info("Evaluate seconds: %.3f", time() - eval_started)
 
 if __name__ == '__main__':
     main()

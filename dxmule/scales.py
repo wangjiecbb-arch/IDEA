@@ -52,6 +52,37 @@ def edge_graph_ids(edge_index: Tensor, batch: Tensor | None, num_nodes: int) -> 
     return batch[edge_index[0]]
 
 
+def hard_retention_mask(scores: Tensor, edge_batch: Tensor, retention: float) -> Tensor:
+    """Hard top-fraction mask for one retention ratio.
+
+    Same keep-count and stable argsort as ``EdgeRetentionScales`` at that
+    ratio. ``retention`` is in (0, 1]. A single ratio is allowed here;
+    ``EdgeRetentionScales`` still requires two ratios because DXMulE links
+    adjacent scales.
+    """
+    if scores.dim() != 1:
+        raise ValueError(f"scores must be rank-1, got {tuple(scores.shape)}")
+    if edge_batch.shape != scores.shape:
+        raise ValueError(
+            f"edge_batch shape {tuple(edge_batch.shape)} != scores {tuple(scores.shape)}"
+        )
+    ratio = float(retention)
+    if ratio <= 0.0 or ratio > 1.0:
+        raise ValueError(f"retention ratio must lie in (0, 1], got {ratio}")
+    out = torch.zeros_like(scores)
+    graph_ids = torch.unique(edge_batch.detach()).tolist()
+    for graph_id in graph_ids:
+        index = (edge_batch == graph_id).nonzero(as_tuple=False).view(-1)
+        chosen = _retain_group(
+            scores.index_select(0, index),
+            ratio,
+            hard=True,
+            temperature=1.0,
+        )
+        out = out.index_copy(0, index, chosen)
+    return out
+
+
 class EdgeRetentionScales:
     """Ordered retention ratios and the masks derived from them.
 

@@ -6,12 +6,20 @@ These checks do not load a dataset and do not measure explanation quality.
 
 from __future__ import annotations
 
+import math
 import unittest
 
 import torch
+from torch_geometric.nn import GCNConv, global_mean_pool
 
 from dxmule.cross_scale import CrossScalePrototypeLink, prototype_assignment
-from dxmule.scales import EdgeRetentionScales, edges_to_keep
+from dxmule.fidelity import (
+    FidelityAccumulator,
+    edge_mask_affects_logits,
+    graph_fidelity,
+    score_hard_mask,
+)
+from dxmule.scales import EdgeRetentionScales, edges_to_keep, hard_retention_mask
 
 
 class ScaleTests(unittest.TestCase):
@@ -58,6 +66,14 @@ class ScaleTests(unittest.TestCase):
         order = torch.argsort(scores, descending=True, stable=True)
         for mask in scales.masks(scores, edge_batch, hard=False, temperature=0.7):
             self.assertTrue(torch.equal(torch.argsort(mask, descending=True, stable=True), order))
+
+    def test_hard_retention_mask_matches_scale_rows(self):
+        scores = torch.tensor([0.1, 0.4, 0.4, 0.2, 5.0, 4.0, 3.0, 2.0])
+        edge_batch = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+        scales = EdgeRetentionScales((0.25, 0.5, 1.0))
+        masks = scales.masks(scores, edge_batch, hard=True)
+        for ratio, mask in zip(scales.ks, masks):
+            self.assertTrue(torch.equal(hard_retention_mask(scores, edge_batch, ratio), mask))
 
     def test_soft_mask_reaches_the_scores(self):
         scores = torch.tensor([0.2, -0.4, 1.5, 0.7], requires_grad=True)
@@ -107,6 +123,75 @@ class CrossScaleTests(unittest.TestCase):
         assign = prototype_assignment(emb, codebook)
         self.assertEqual(assign.shape, (3, 7))
         self.assertTrue(torch.allclose(assign.sum(dim=-1), torch.ones(3), atol=1e-5))
+
+
+class _TinyGCN(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = GCNConv(3, 4)
+        self.lin = torch.nn.Linear(4, 2)
+
+    def forward(self, x, edge_index, batch=None):
+        hidden = self.conv(x, edge_index).relu()
+        if batch is None:
+            pooled = hidden.mean(dim=0, keepdim=True)
+        else:
+            pooled = global_mean_pool(hidden, batch)
+        return self.lin(pooled)
+
+
+class FidelityTests(unittest.TestCase):
+    def test_graph_fidelity_matches_softmax_drop(self):
+        full = torch.tensor([[4.0, 0.0]])
+        keep = torch.tensor([[4.0, 0.0]])
+        drop = torch.tensor([[0.0, 4.0]])
+        stats = graph_fidelity(full, keep, drop)
+        self.assertEqual(stats["acc"], 1.0)
+        self.assertAlmostEqual(stats["fidelity_minus"], 0.0)
+        p_full = float(torch.softmax(full, dim=-1)[0, 0])
+        p_drop = float(torch.softmax(drop, dim=-1)[0, 0])
+        self.assertAlmostEqual(stats["fidelity_plus"], p_full - p_drop)
+        flipped = graph_fidelity(full, torch.tensor([[0.0, 4.0]]), drop)
+        self.assertEqual(flipped["acc"], 0.0)
+
+    def test_accumulator_means_two_graphs(self):
+        bucket = FidelityAccumulator((0.1, 0.5))
+        bucket.add(0.1, {"acc": 1.0, "fidelity_plus": 0.2, "fidelity_minus": 0.0})
+        bucket.add(0.1, {"acc": 0.0, "fidelity_plus": 0.4, "fidelity_minus": 0.2})
+        bucket.add(0.5, {"acc": 1.0, "fidelity_plus": 0.1, "fidelity_minus": -0.1})
+        lines = bucket.lines()
+        self.assertIn("FIDELITY p=0.10 n=2 acc=0.500000 fid_plus=0.300000 fid_minus=0.100000", lines)
+        self.assertIn("FIDELITY p=0.50 n=1 acc=1.000000 fid_plus=0.100000 fid_minus=-0.100000", lines)
+
+    def test_empty_ratio_is_nan_not_a_fake_zero(self):
+        line = FidelityAccumulator((0.3,)).lines()[0]
+        self.assertIn("n=0", line)
+        self.assertIn("acc=nan", line)
+
+    def test_hard_mask_changes_tiny_gcn_and_scores_are_finite(self):
+        torch.manual_seed(0)
+        model = _TinyGCN().eval()
+        x = torch.randn(5, 3)
+        edge_index = torch.tensor([[0, 1, 2, 3, 4, 1], [1, 2, 3, 4, 0, 0]])
+        batch = torch.zeros(5, dtype=torch.long)
+        self.assertTrue(edge_mask_affects_logits(model, x, edge_index, batch))
+        full = model(x, edge_index, batch)
+        mask = torch.tensor([1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+        stats = score_hard_mask(model, x, edge_index, batch, full, mask)
+        self.assertIsNotNone(stats)
+        self.assertIn(stats["acc"], (0.0, 1.0))
+        self.assertTrue(math.isfinite(stats["fidelity_plus"]))
+        self.assertTrue(math.isfinite(stats["fidelity_minus"]))
+        self.assertIsNone(
+            score_hard_mask(
+                model,
+                x,
+                edge_index.new_zeros((2, 0)),
+                batch,
+                full,
+                mask.new_zeros(0),
+            )
+        )
 
 
 if __name__ == "__main__":

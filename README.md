@@ -45,7 +45,7 @@ python explainer/eval_dxmule.py --dataset Benzene --root_path ./ --device -1 \
     --scales 0.1,0.3,0.5,0.7,0.9
 ```
 
-`--max_graphs` truncates the split so the path can be smoke-tested. The script logs ROC-AUC of the shared edge score, and precision/recall of each hard top-k mask against the ground-truth edges. Soft masks are monotone in that shared score, so they do not get a separate AUC. Those logs are a sanity check. Fidelity ACC@p is still unfinished.
+`--max_graphs` truncates the split so the path can be smoke-tested. The script logs ROC-AUC of the shared edge score, and precision/recall of each hard top-k mask against the ground-truth edges. Soft masks are monotone in that shared score, so they do not get a separate AUC. Those logs are a sanity check. Both entry points also log ACC@p and Fidelity+/-@p from `dxmule/fidelity.py` on a hard top-p grid. A logged number is a run record. It is not a gate approval.
 
 Core checks that do not load the GNN:
 
@@ -63,8 +63,8 @@ python -m dxmule.test_core
 
 **Hypothesis / TODO**
 
-- Whether C2, the shell, or the complement term improves ROC-AUC or fidelity over single-scale IDEA. No comparison has been run.
-- Fidelity ACC@p, sufficiency/necessity, and complement deletion. The eval script logs ROC-AUC only and marks this unfinished.
+- Whether C2, the shell, or the complement term improves ROC-AUC or fidelity over single-scale IDEA. A full-split Benzene run, when present, is recorded in `dxmule/FORMAL_COMPARE_Benzene.md` as HYPOTHESIS. It does not establish that one method is better.
+- Fidelity formulas other than the ACC@p / Fidelity+/-@p protocol in `dxmule/fidelity.py`. Complement-deletion curves beyond Fidelity+@p are not a separate sweep.
 - Multi-scale quantization inside HGTokenizer. Codebooks are still learned on the full graph.
 - Replacing the transport KL with a Sinkhorn loss on the same assignments.
 - Choosing `{k_m}` per graph, node-level retention, and directed or heterogeneous graphs.
