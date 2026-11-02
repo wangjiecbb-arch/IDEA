@@ -22,6 +22,7 @@ import os
 import pickle
 import random
 import sys
+import time
 import zipfile
 
 import numpy as np
@@ -224,10 +225,35 @@ def train_single_scale_tokenizer(
     return codebook_a, codebook_b
 
 
-def train_dxmule(explainer, train_loader, epochs: int, device: str):
+def _batch_node_counts(data):
+    if getattr(data, "batch", None) is None:
+        return [int(data.num_nodes)]
+    return torch.bincount(data.batch).detach().cpu().tolist()
+
+
+def _grad_flow(module):
+    """Whether the last backward left a finite, non-zero gradient on any parameter."""
+    nonzero = 0
+    abs_sum = 0.0
+    saw_grad = False
+    finite = True
+    for param in module.parameters():
+        if param.grad is None:
+            continue
+        saw_grad = True
+        finite = finite and bool(torch.isfinite(param.grad).all().item())
+        mag = float(param.grad.detach().abs().sum().item())
+        abs_sum += mag
+        if mag > 0.0:
+            nonzero += 1
+    return bool(saw_grad and finite), nonzero, abs_sum
+
+
+def train_dxmule(explainer, train_loader, epochs: int, device: str, smoke: bool = False):
     model = explainer.model
     model.eval()
     history = []
+    started = time.perf_counter()
     for epoch in range(epochs):
         totals = {
             "loss": 0.0,
@@ -241,8 +267,11 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str):
             "shell_loss": 0.0,
             "persistence": 0.0,
         }
+        train_counts = []
         for data in train_loader:
             data = data.to(device)
+            if smoke and epoch == 0:
+                train_counts.append(_batch_node_counts(data))
             with torch.no_grad():
                 # Unmasked embedding of this batch. Recomputed every step so
                 # shuffling the loader cannot pair a graph with another graph's target.
@@ -260,6 +289,8 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str):
             )
             for key in totals:
                 totals[key] += float(stats[key])
+        if smoke and epoch == 0:
+            logging.info("SMOKE epoch-1 train batch node counts: %s", train_counts)
         steps = max(len(train_loader), 1)
         averaged = {key: value / steps for key, value in totals.items()}
         history.append(averaged)
@@ -282,6 +313,15 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str):
         )
         if not np.isfinite(averaged["loss"]):
             raise RuntimeError("DXMulE loss is not finite. Stopped before evaluation.")
+    if smoke:
+        grad_finite, grad_nonzero, grad_abs = _grad_flow(explainer.algorithm)
+        logging.info(
+            "SMOKE last-step grad flow: finite=%s nonzero_params=%s grad_abs_sum=%.6f",
+            grad_finite,
+            grad_nonzero,
+            grad_abs,
+        )
+        logging.info("SMOKE train loop seconds: %.3f", time.perf_counter() - started)
     return history
 
 
@@ -312,6 +352,7 @@ def evaluate_dxmule(explainer, test_loader, device: str):
     }
     model = explainer.model
     model.eval()
+    n_nested = 0
 
     with torch.no_grad():
         for data in test_loader:
@@ -334,6 +375,7 @@ def evaluate_dxmule(explainer, test_loader, device: str):
                         "Hard retention masks are not nested. "
                         "Scales must be one shared top-k ranking."
                     )
+            n_nested += 1
             positive = labels > 0.5
             n_positive = int(positive.sum())
             for row, ratio in enumerate(ratios):
@@ -357,10 +399,16 @@ def evaluate_dxmule(explainer, test_loader, device: str):
         return float(np.mean(finite))
 
     logging.info(
-        "Shared-score ROC-AUC %.4f (n=%s). Soft masks reuse this ranking, "
+        "Hard retention masks nested: True (n=%s graphs). "
+        "A violation raises before this line.",
+        n_nested,
+    )
+    logging.info(
+        "Shared-score ROC-AUC %.4f (n=%s) values=%s. Soft masks reuse this ranking, "
         "so they are not scored separately. TODO: fidelity protocol is unfinished.",
         _mean(shared_aucs),
         len(shared_aucs),
+        [round(float(a), 4) for a in shared_aucs],
     )
     for ratio in ratios:
         bucket = per_scale[ratio]
@@ -506,7 +554,13 @@ def main():
         model_config=model_config,
     )
 
-    train_dxmule(explainer, train_loader, args.epochs, device)
+    train_dxmule(
+        explainer,
+        train_loader,
+        args.epochs,
+        device,
+        smoke=args.max_graphs is not None,
+    )
     evaluate_dxmule(explainer, test_loader, device)
 
 

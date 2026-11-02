@@ -32,6 +32,24 @@ def topk_mask_py(lst, k):
         mask[idx] = 1
     return mask
 
+def _grad_flow(module):
+    """Whether the last backward left a finite, non-zero gradient on any parameter."""
+    nonzero = 0
+    abs_sum = 0.0
+    saw_grad = False
+    finite = True
+    for param in module.parameters():
+        if param.grad is None:
+            continue
+        saw_grad = True
+        finite = finite and bool(torch.isfinite(param.grad).all().item())
+        mag = float(param.grad.detach().abs().sum().item())
+        abs_sum += mag
+        if mag > 0.0:
+            nonzero += 1
+    return bool(saw_grad and finite), nonzero, abs_sum
+
+
 def get_dataset(dataset_name="BA2Motif", root_path=".", **kwargs):
     if dataset_name == "Mutag":
         with open(root_path + 'data/mutag_with_gt.pkl', 'rb') as f:
@@ -58,18 +76,29 @@ def init_model(dataset_name="BA2Motif", root_path = ".", device = None):
     model.eval()
     return model
 
+def _batch_node_counts(data):
+    if getattr(data, "batch", None) is None:
+        return [int(data.num_nodes)]
+    return torch.bincount(data.batch).detach().cpu().tolist()
+
+
 def train_explainer(explainer, train_loader, epochs = 20,
-                    exp_type = "phenomenon", device = None):
+                    exp_type = "phenomenon", device = None, smoke = False):
     losses = []
     start_time = time()
     
     emd_targets = []
+    precompute_counts = []
     with torch.no_grad():
         for data in train_loader:
             data = data.to(device)
             explainer.model.eval()
             emd = explainer.model.embedding(data.x, data.edge_index)
             emd_targets.append(global_mean_pool(emd, data.batch))
+            if smoke:
+                precompute_counts.append(_batch_node_counts(data))
+    if smoke:
+        logging.info("SMOKE precompute batch node counts: %s", precompute_counts)
     
     for epoch in range(epochs):
         epoch_loss = {
@@ -78,8 +107,11 @@ def train_explainer(explainer, train_loader, epochs = 20,
             'codebook_loss': 0.0,
         }
         loss_key = list(epoch_loss.keys())
+        train_counts = []
         for idx, data in enumerate(train_loader):
             data = data.to(device)
+            if smoke and epoch == 0:
+                train_counts.append(_batch_node_counts(data))
             target = explainer.model(data.x, data.edge_index, data.batch)
             ls = explainer.algorithm.train(epoch, 
                             explainer.model, 
@@ -91,6 +123,8 @@ def train_explainer(explainer, train_loader, epochs = 20,
             assert len(ls) == len(loss_key), "Loss keys and values mismatch"
             for i in range(len(loss_key)):
                 epoch_loss[loss_key[i]] += ls[i]
+        if smoke and epoch == 0:
+            logging.info("SMOKE epoch-1 train batch node counts: %s", train_counts)
         avg_loss = {k: v / len(train_loader) for k, v in epoch_loss.items()}
         logging.info(f"Epoch {epoch+1}/{epochs}"
                         f"- RQVAE Loss: {avg_loss['rqvae_loss']:.4f}\n" +
@@ -99,6 +133,14 @@ def train_explainer(explainer, train_loader, epochs = 20,
                         f"- Time: {time() - start_time:.2f}s")
         losses.append(avg_loss['rqvae_loss'])
 
+    if smoke:
+        grad_finite, grad_nonzero, grad_abs = _grad_flow(explainer.algorithm)
+        logging.info(
+            "SMOKE last-step grad flow: finite=%s nonzero_params=%s grad_abs_sum=%.6f",
+            grad_finite,
+            grad_nonzero,
+            grad_abs,
+        )
     return losses
 
 def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None, dataset = None):
@@ -119,8 +161,14 @@ def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None,
                 auc = roc_auc_score(data.edge_mask.int().tolist(), exp.edge_mask.cpu().tolist())
                 results['roc_auc'].append(auc)
     
-    logging.info(f"Evaluation Results \n"
-                 f"- ROC AUC: {np.mean(results['roc_auc']):.4f}\n")
+    aucs = results['roc_auc']
+    auc_mean = float(np.mean(aucs)) if aucs else float("nan")
+    logging.info(
+        "Evaluation Results - ROC AUC: %.4f (n=%s) values=%s",
+        auc_mean,
+        len(aucs),
+        [round(float(a), 4) for a in aucs],
+    )
     
     return results
 
@@ -138,6 +186,13 @@ def main():
     parser.add_argument('--use_ckpt', type=int, default=1)
     parser.add_argument("--gt_learning_rate", type=float, default=1e-3, help="GT Learning rate")
     parser.add_argument("--gt_epochs", type=int, default=10, help="Training epochs")
+    parser.add_argument(
+        "--max_graphs",
+        type=int,
+        default=None,
+        help="If set, truncate train/test the same way as explainer/eval_dxmule.py. "
+             "Metrics are a smoke check, not a benchmark.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -193,6 +248,20 @@ def main():
         logging.info(f"Training graphs: {len(train_set)}, Testing graphs: {len(test_set)}")
     else:
         raise NotImplementedError(f"Dataset {args.dataset} not implemented")
+
+    if args.max_graphs is not None:
+        if args.max_graphs < 2:
+            raise ValueError("max_graphs must be at least 2")
+        # Same truncation as explainer/eval_dxmule.py: the head of each split.
+        train_set = list(train_set)[: args.max_graphs]
+        test_keep = max(1, args.max_graphs // 4)
+        test_set = list(test_set)[:test_keep]
+        logging.info(
+            "max_graphs=%s truncates the split (smoke, not a benchmark). train %s test %s",
+            args.max_graphs,
+            len(train_set),
+            len(test_set),
+        )
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
@@ -300,6 +369,7 @@ def main():
                         train_loader, 
                         args.epochs,
                         device = device,
+                        smoke = args.max_graphs is not None,
     )
     _ = evaluate_explainer(explainer,
                                     test_loader,
