@@ -1,0 +1,31 @@
+=== HOST ===
+2026-11-02T03:38:15Z
+Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Tue Oct 27 12:38:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+nproc 4
+torch 2.6.0+cpu
+cuda False
+pyg 2.6.1
+numpy 1.26.4
+sklearn 1.6.1
+geomloss 0.2.6
+=== CMD ===
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 python3 -u explainer/eval_dxmule.py --dataset Benzene --root_path ./ --device -1 --epochs 2 --lr 0.001 --batch_size 4 --max_graphs 8 --seed 2025 --use_ckpt 1 --codebook_size 32 --scales 0.1,0.3,0.5,0.7,0.9 --cross_scale_weight 0.1 --complement_weight 0.1 --shell_weight 0.1 --retention_temperature 1.0
+=== RUN ===
+2026-11-02 03:38:19,715 - INFO - Device cpu root /workspace scales (0.1, 0.3, 0.5, 0.7, 0.9)
+2026-11-02 03:38:19,715 - INFO - max_graphs=8 truncates the split. Losses and AUC below are a smoke check.
+2026-11-02 03:38:22,882 - INFO - Benzene graphs in this run: train 8, test 2, features 14, classes 2
+2026-11-02 03:38:22,912 - INFO - Loaded pretrained codebooks from /workspace/codebook
+2026-11-02 03:38:23,064 - INFO - SMOKE epoch-1 train batch node counts: [[22, 25, 23, 21], [9, 25, 21, 24]]
+2026-11-02 03:38:23,065 - INFO - Epoch 1/2 loss 4.3676 rv 4.3163 dist 0.0019 recon 1.3846 cross 0.2557 (topdown 0.0011 reverse 0.0011 shell 2.5349 persist 0.638) complement 0.2576
+2026-11-02 03:38:23,204 - INFO - Epoch 2/2 loss 3.1619 rv 3.1231 dist 0.0018 recon 1.0406 cross 0.1433 (topdown 0.0032 reverse 0.0031 shell 1.3702 persist 0.638) complement 0.2443
+2026-11-02 03:38:23,205 - INFO - SMOKE last-step grad flow: finite=True nonzero_params=7 grad_abs_sum=3.010831
+2026-11-02 03:38:23,205 - INFO - SMOKE train loop seconds: 0.293
+2026-11-02 03:38:23,218 - INFO - Hard retention masks nested: True (n=2 graphs). A violation raises before this line.
+2026-11-02 03:38:23,218 - INFO - Shared-score ROC-AUC 0.9042 (n=2) values=[0.9708, 0.8375]. Soft masks reuse this ranking, so they are not scored separately. TODO: fidelity protocol is unfinished.
+2026-11-02 03:38:23,218 - INFO - Hard retention k=0.10 realized 0.115 precision 0.667 recall 0.333 (n=2)
+2026-11-02 03:38:23,218 - INFO - Hard retention k=0.30 realized 0.308 precision 0.594 recall 0.792 (n=2)
+2026-11-02 03:38:23,218 - INFO - Hard retention k=0.50 realized 0.500 precision 0.462 recall 1.000 (n=2)
+2026-11-02 03:38:23,218 - INFO - Hard retention k=0.70 realized 0.712 precision 0.324 recall 1.000 (n=2)
+2026-11-02 03:38:23,218 - INFO - Hard retention k=0.90 realized 0.904 precision 0.255 recall 1.000 (n=2)
+ELAPSED_SEC 6.217
+EXIT 0
