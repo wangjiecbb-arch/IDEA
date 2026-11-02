@@ -1,8 +1,9 @@
 """Train and score DXMulE.
 
-The original IDEA entry point is ``explainer/eval_idea.py`` and is unchanged.
-This script is the multi-scale path: shared IDEA codebooks, retention ratios
-{k_m}, and the cross-scale prototype link.
+The single-scale path is ``explainer/eval_idea.py``. This script is the
+multi-scale path: shared IDEA codebooks, retention ratios {k_m}, and the
+cross-scale prototype link. Both paths recompute the unmasked embedding
+target on the batch being trained.
 
 Example (CPU smoke, not a benchmark):
 
@@ -29,16 +30,14 @@ import zipfile
 
 import numpy as np
 import torch
-from sklearn.metrics import roc_auc_score
 from torch_geometric.explain import Explainer
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import global_mean_pool
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+from dxmule.embedding_target import unmasked_embedding_target
 from dxmule.explainer import DXMulE
 from dxmule.fidelity import (
     DEFINITION,
@@ -46,6 +45,7 @@ from dxmule.fidelity import (
     edge_mask_affects_logits,
     score_hard_mask,
 )
+from dxmule.matched_auc import classify_graph_auc, write_auc_record
 from dxmule.scales import parse_scales
 
 
@@ -262,6 +262,10 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str, smoke: bool 
     model.eval()
     history = []
     started = time.perf_counter()
+    logging.info(
+        "DXMulE unmasked embedding target is recomputed on the current batch "
+        "each optimizer step. A cached list indexed by DataLoader position is not used."
+    )
     for epoch in range(epochs):
         totals = {
             "loss": 0.0,
@@ -280,11 +284,11 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str, smoke: bool 
             data = data.to(device)
             if smoke and epoch == 0:
                 train_counts.append(_batch_node_counts(data))
-            with torch.no_grad():
-                # Unmasked embedding of this batch. Recomputed every step so
-                # shuffling the loader cannot pair a graph with another graph's target.
-                full = model.embedding(data.x, data.edge_index)
-                emd_target = global_mean_pool(full, data.batch)
+            # Unmasked embedding of this batch. Recomputed every step so
+            # shuffling the loader cannot pair a graph with another graph's target.
+            emd_target = unmasked_embedding_target(
+                model, data.x, data.edge_index, data.batch
+            )
             target = model(data.x, data.edge_index, data.batch)
             stats = explainer.algorithm.train(
                 epoch,
@@ -335,31 +339,24 @@ def train_dxmule(explainer, train_loader, epochs: int, device: str, smoke: bool 
     return history
 
 
-def _auc_status(labels, scores) -> tuple[str, float | None]:
-    labels = np.asarray(labels).astype(int)
-    scores = np.asarray(scores, dtype=float)
-    if labels.min() == labels.max():
-        return "constant_labels", None
-    if np.allclose(scores, scores[0]):
-        return "constant_scores", None
-    return "ok", float(roc_auc_score(labels, scores))
-
-
-def evaluate_dxmule(explainer, test_loader, device: str):
+def evaluate_dxmule(explainer, test_loader, device: str, auc_record_path: str | None = None, auc_meta: dict | None = None):
     """Shared-score ROC-AUC, hard-mask precision and recall, and fidelity.
 
     Soft retention masks are strictly increasing functions of the same logits,
     so they induce the same edge ranking and the same ROC-AUC. Per-scale
     precision and recall compare the hard top-k subgraph to ground-truth edges.
     ACC@p and Fidelity+/-@p use those same hard masks against the frozen GNN.
-    A constant ground-truth edge label, or a constant explanation score, is
-    left out of ROC-AUC and counted separately. Recall is averaged only over
-    graphs with at least one positive ground-truth edge.
+    The logged OWN-RULE ROC-AUC leaves out a constant ground-truth edge label
+    or a constant explanation score. That set can differ from IDEA. The fair
+    number is the matched subset from ``dxmule.matched_auc``. Recall is
+    averaged only over graphs with at least one positive ground-truth edge.
     """
     ratios = explainer.algorithm.retention.ks
     shared_aucs = []
     n_const_label = 0
     n_const_score = 0
+    n_nonfinite = 0
+    graph_records = []
     per_scale = {
         k: {"precision": [], "recall": [], "retention": []} for k in ratios
     }
@@ -376,16 +373,25 @@ def evaluate_dxmule(explainer, test_loader, device: str):
             explanation = explainer(
                 data.x, data.edge_index, target=target, batch=data.batch
             )
+            if int(data.num_graphs) != 1:
+                raise RuntimeError(
+                    "AUC records require test batch_size 1, "
+                    f"got {int(data.num_graphs)} graphs"
+                )
             labels = data.edge_mask.detach().float().cpu()
-            status, shared = _auc_status(
-                labels.tolist(), explanation.edge_mask.detach().cpu().tolist()
+            record = classify_graph_auc(
+                labels.numpy(), explanation.edge_mask.detach().float().cpu().numpy()
             )
-            if status == "constant_labels":
+            record["index"] = idx
+            graph_records.append(record)
+            if record["constant_label"]:
                 n_const_label += 1
-            elif status == "constant_scores":
+            elif not record["score_finite"]:
+                n_nonfinite += 1
+            elif record["constant_score"]:
                 n_const_score += 1
-            elif shared is not None:
-                shared_aucs.append(shared)
+            elif record["auc"] is not None:
+                shared_aucs.append(float(record["auc"]))
 
             hard = explanation.scale_hard_masks.detach().cpu()
             if hard.size(0) != len(ratios):
@@ -451,7 +457,7 @@ def evaluate_dxmule(explainer, test_loader, device: str):
     if shared_aucs:
         arr = np.asarray(shared_aucs, dtype=float)
         logging.info(
-            "ROC-AUC summary mean=%.6f std_ddof0=%.6f min=%.6f max=%.6f n=%s",
+            "OWN-RULE ROC-AUC summary mean=%.6f std_ddof0=%.6f min=%.6f max=%.6f n=%s",
             float(arr.mean()),
             float(arr.std(ddof=0)),
             float(arr.min()),
@@ -459,20 +465,40 @@ def evaluate_dxmule(explainer, test_loader, device: str):
             len(shared_aucs),
         )
     else:
-        logging.info("ROC-AUC summary mean=nan std_ddof0=nan min=nan max=nan n=0")
+        logging.info("OWN-RULE ROC-AUC summary mean=nan std_ddof0=nan min=nan max=nan n=0")
     logging.info(
-        "AUC skipped_constant_labels=%s skipped_constant_scores=%s scored=%s",
+        "OWN-RULE skips constant labels or constant scores. "
+        "constant_label=%s constant_score=%s nonfinite_scores=%s scored=%s",
         n_const_label,
         n_const_score,
+        n_nonfinite,
         len(shared_aucs),
     )
     logging.info(
-        "Shared-score ROC-AUC %.4f (n=%s) values=%s. Soft masks reuse this ranking, "
-        "so they are not scored separately.",
+        "OWN-RULE Shared-score ROC-AUC %.4f (n=%s). Soft masks reuse this ranking, "
+        "so they are not scored separately. "
+        "This n can differ from IDEA. Matched-subset AUC is computed by "
+        "dxmule.matched_auc from --auc_record.",
         _mean(shared_aucs),
         len(shared_aucs),
-        [round(float(a), 4) for a in shared_aucs],
     )
+    if auc_record_path:
+        meta = dict(auc_meta or {})
+        payload = {
+            "method": "dxmule",
+            "dataset": meta.get("dataset"),
+            "seed": meta.get("seed"),
+            "protocol": meta.get("protocol", {}),
+            "score": "sigmoid of the shared DXMulE edge logit (Explanation.edge_mask)",
+            "n_graphs": len(graph_records),
+            "graphs": graph_records,
+        }
+        write_auc_record(auc_record_path, payload)
+        logging.info(
+            "Wrote per-graph AUC record %s n=%s",
+            auc_record_path,
+            len(graph_records),
+        )
     for ratio in ratios:
         bucket = per_scale[ratio]
         logging.info(
@@ -543,12 +569,19 @@ def main():
         default=None,
         help="If set, truncate train/test for a smoke run. Metrics are not a benchmark.",
     )
+    parser.add_argument(
+        "--auc_record",
+        type=str,
+        default="",
+        help="Write per-graph AUC flags for matched-subset scoring. Empty skips the file.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
 
     root = normalize_root(args.root_path)
     device = resolve_device(args.device)
@@ -563,7 +596,7 @@ def main():
         "PROTOCOL dataset=%s epochs=%s lr=%s batch_size=%s seed=%s "
         "codebook_size=%s use_ckpt=%s max_graphs=%s scales=%s "
         "cross_scale_weight=%s complement_weight=%s shell_weight=%s "
-        "retention_temperature=%s device=%s",
+        "retention_temperature=%s device=%s embedding_target=current_batch",
         args.dataset,
         args.epochs,
         args.lr,
@@ -578,6 +611,9 @@ def main():
         args.shell_weight,
         args.retention_temperature,
         device,
+    )
+    logging.info(
+        "NOTE DXMulE loss values are not comparable to IDEA. The objectives differ."
     )
     if args.max_graphs is not None:
         logging.info(
@@ -678,7 +714,27 @@ def main():
         smoke=args.max_graphs is not None,
     )
     eval_started = time.perf_counter()
-    evaluate_dxmule(explainer, test_loader, device)
+    evaluate_dxmule(
+        explainer,
+        test_loader,
+        device,
+        auc_record_path=args.auc_record or None,
+        auc_meta={
+            "dataset": args.dataset,
+            "seed": args.seed,
+            "protocol": {
+                "epochs": args.epochs,
+                "lr": args.lr,
+                "batch_size": args.batch_size,
+                "codebook_size": args.codebook_size,
+                "use_ckpt": args.use_ckpt,
+                "max_graphs": args.max_graphs,
+                "scales": list(scales),
+                "device": device,
+                "embedding_target": "current_batch",
+            },
+        },
+    )
     logging.info("Evaluate seconds: %.3f", time.perf_counter() - eval_started)
 
 

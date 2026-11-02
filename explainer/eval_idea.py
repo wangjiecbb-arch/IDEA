@@ -18,18 +18,18 @@ sys.path.append(parent_dir)
 from torch_geometric.loader import DataLoader
 from torch_geometric.explain import Explainer
 from torch_geometric.explain.algorithm.utils import clear_masks
-from torch_geometric.nn import global_mean_pool
-
 from gnn_model import *
 from idea import Idea
 from sklearn.metrics import roc_auc_score
 
+from dxmule.embedding_target import unmasked_embedding_target
 from dxmule.fidelity import (
     DEFINITION,
     FidelityAccumulator,
     edge_mask_affects_logits,
     score_hard_mask,
 )
+from dxmule.matched_auc import classify_graph_auc, write_auc_record
 from dxmule.scales import edge_graph_ids, hard_retention_mask, parse_scales
 
 def topk_mask_py(lst, k):
@@ -95,20 +95,11 @@ def train_explainer(explainer, train_loader, epochs = 20,
                     exp_type = "phenomenon", device = None, smoke = False):
     losses = []
     start_time = time()
-    
-    emd_targets = []
-    precompute_counts = []
-    with torch.no_grad():
-        for data in train_loader:
-            data = data.to(device)
-            explainer.model.eval()
-            emd = explainer.model.embedding(data.x, data.edge_index)
-            emd_targets.append(global_mean_pool(emd, data.batch))
-            if smoke:
-                precompute_counts.append(_batch_node_counts(data))
-    if smoke:
-        logging.info("SMOKE precompute batch node counts: %s", precompute_counts)
-    
+    logged_pairing = False
+
+    # The unmasked embedding target is computed inside the epoch loop on the
+    # batch just drawn. A list cached before the loop and indexed by position
+    # is wrong: shuffle=True changes batch membership every iteration.
     for epoch in range(epochs):
         epoch_loss = {
             'rqvae_loss': 0.0,
@@ -117,17 +108,33 @@ def train_explainer(explainer, train_loader, epochs = 20,
         }
         loss_key = list(epoch_loss.keys())
         train_counts = []
-        for idx, data in enumerate(train_loader):
+        for data in train_loader:
             data = data.to(device)
             if smoke and epoch == 0:
                 train_counts.append(_batch_node_counts(data))
+            emd_target = unmasked_embedding_target(
+                explainer.model, data.x, data.edge_index, data.batch
+            )
+            n_graphs = int(data.num_graphs)
+            if emd_target.size(0) != n_graphs:
+                raise RuntimeError(
+                    f"embedding target has {emd_target.size(0)} rows for {n_graphs} graphs"
+                )
+            if not logged_pairing:
+                logging.info(
+                    "IDEA unmasked embedding target is recomputed on the current "
+                    "batch each optimizer step (rows=%s). A cached list indexed by "
+                    "DataLoader position is not used.",
+                    n_graphs,
+                )
+                logged_pairing = True
             target = explainer.model(data.x, data.edge_index, data.batch)
             ls = explainer.algorithm.train(epoch, 
                             explainer.model, 
                             data.x, 
                             data.edge_index, 
                             target = target,
-                            emd_target = emd_targets[idx], 
+                            emd_target = emd_target, 
                             batch = data.batch)
             assert len(ls) == len(loss_key), "Loss keys and values mismatch"
             for i in range(len(loss_key)):
@@ -143,7 +150,7 @@ def train_explainer(explainer, train_loader, epochs = 20,
         losses.append(avg_loss['rqvae_loss'])
 
     logging.info(
-        "Train loop seconds: %.3f (includes unmasked embedding precompute)",
+        "Train loop seconds: %.3f (unmasked embedding recomputed on each current batch)",
         time() - start_time,
     )
     if smoke:
@@ -179,12 +186,47 @@ def _log_fidelity(fidelity, mask_ok):
         logging.info("%s", line)
 
 
+def _log_own_rule_auc(aucs, constant_label, constant_score_mixed, nonfinite):
+    """Phase-1 IDEA inclusion: drop constant ground-truth labels only.
+
+    This count is not the fair comparison. Constant explanation scores stay
+    inside it. Matched-subset AUC is computed later from the per-graph record.
+    """
+    if aucs:
+        arr = np.asarray(aucs, dtype=float)
+        logging.info(
+            "OWN-RULE ROC-AUC summary mean=%.6f std_ddof0=%.6f min=%.6f max=%.6f n=%s",
+            float(arr.mean()),
+            float(arr.std(ddof=0)),
+            float(arr.min()),
+            float(arr.max()),
+            len(aucs),
+        )
+    else:
+        logging.info("OWN-RULE ROC-AUC summary mean=nan std_ddof0=nan min=nan max=nan n=0")
+    logging.info(
+        "OWN-RULE skips constant labels only. constant_label=%s "
+        "constant_score_mixed_labels=%s nonfinite_scores=%s scored=%s",
+        constant_label,
+        constant_score_mixed,
+        nonfinite,
+        len(aucs),
+    )
+    logging.info(
+        "OWN-RULE ROC-AUC is not the fair comparison. "
+        "Matched-subset AUC is computed by dxmule.matched_auc from --auc_record."
+    )
+
+
 def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None, dataset = None,
-                       fidelity_ratios=()):
+                       fidelity_ratios=(), auc_record_path=None, auc_meta=None):
     results = {
         'roc_auc': [],
     }
     skipped_constant_labels = 0
+    constant_score_mixed = 0
+    nonfinite_scores = 0
+    graph_records = []
     fidelity = FidelityAccumulator(fidelity_ratios) if fidelity_ratios else None
     mask_ok = None
     model.eval()
@@ -192,16 +234,31 @@ def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None,
     with torch.no_grad():
         for idx, data in enumerate(tqdm(test_loader, desc = "Processing Test Data", ncols = 80)):
             data = data.to(device)
+            if int(data.num_graphs) != 1:
+                raise RuntimeError(
+                    "AUC records require test batch_size 1, "
+                    f"got {int(data.num_graphs)} graphs"
+                )
             clear_masks(model)
             target = explainer.model(data.x, data.edge_index, data.batch)
             exp = explainer(data.x, data.edge_index, target = target, batch = data.batch)
 
-            same = (data.edge_mask == data.edge_mask[0]).all().item()
-            if same:
+            labels = data.edge_mask.detach().float().cpu().numpy()
+            scores_np = exp.edge_mask.detach().float().cpu().numpy()
+            record = classify_graph_auc(labels, scores_np)
+            record["index"] = idx
+            graph_records.append(record)
+            if record["constant_label"]:
                 skipped_constant_labels += 1
+            elif not record["score_finite"]:
+                nonfinite_scores += 1
+            elif record["constant_score"]:
+                constant_score_mixed += 1
+                results['roc_auc'].append(
+                    float(roc_auc_score(labels.astype(int), scores_np))
+                )
             else:
-                auc = roc_auc_score(data.edge_mask.int().tolist(), exp.edge_mask.cpu().tolist())
-                results['roc_auc'].append(auc)
+                results['roc_auc'].append(float(record["auc"]))
 
             if fidelity is None or mask_ok is False:
                 continue
@@ -230,31 +287,29 @@ def evaluate_explainer(explainer, test_loader, model, device=None, gt_mask=None,
                     break
                 fidelity.add(ratio, stats)
 
-    aucs = results['roc_auc']
-    auc_mean = float(np.mean(aucs)) if aucs else float("nan")
-    if aucs:
-        arr = np.asarray(aucs, dtype=float)
-        logging.info(
-            "ROC-AUC summary mean=%.6f std_ddof0=%.6f min=%.6f max=%.6f n=%s",
-            float(arr.mean()),
-            float(arr.std(ddof=0)),
-            float(arr.min()),
-            float(arr.max()),
-            len(aucs),
-        )
-    else:
-        logging.info("ROC-AUC summary mean=nan std_ddof0=nan min=nan max=nan n=0")
-    logging.info(
-        "AUC skipped_constant_labels=%s scored=%s",
+    _log_own_rule_auc(
+        results['roc_auc'],
         skipped_constant_labels,
-        len(aucs),
+        constant_score_mixed,
+        nonfinite_scores,
     )
-    logging.info(
-        "Evaluation Results - ROC AUC: %.4f (n=%s) values=%s",
-        auc_mean,
-        len(aucs),
-        [round(float(a), 4) for a in aucs],
-    )
+    if auc_record_path:
+        meta = dict(auc_meta or {})
+        payload = {
+            "method": "idea",
+            "dataset": meta.get("dataset", dataset),
+            "seed": meta.get("seed"),
+            "protocol": meta.get("protocol", {}),
+            "score": "sigmoid of the IDEA edge logit (Explanation.edge_mask)",
+            "n_graphs": len(graph_records),
+            "graphs": graph_records,
+        }
+        write_auc_record(auc_record_path, payload)
+        logging.info(
+            "Wrote per-graph AUC record %s n=%s",
+            auc_record_path,
+            len(graph_records),
+        )
     _log_fidelity(fidelity, mask_ok)
 
     return results
@@ -287,6 +342,12 @@ def main():
         help="Hard top-p grid for ACC@p and Fidelity+/-@p. "
              "Independent of DXMulE retention. Empty is not allowed.",
     )
+    parser.add_argument(
+        "--auc_record",
+        type=str,
+        default="",
+        help="Write per-graph AUC flags for matched-subset scoring. Empty skips the file.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -311,7 +372,8 @@ def main():
     fidelity_ratios = tuple(sorted(set(parse_scales(args.fidelity_scales))))
     logging.info(
         "PROTOCOL dataset=%s epochs=%s lr=%s batch_size=%s seed=%s "
-        "codebook_size=%s use_ckpt=%s max_graphs=%s fidelity_scales=%s device=%s",
+        "codebook_size=%s use_ckpt=%s max_graphs=%s fidelity_scales=%s "
+        "device=%s embedding_target=current_batch",
         args.dataset,
         args.epochs,
         args.lr,
@@ -322,6 +384,9 @@ def main():
         args.max_graphs,
         fidelity_ratios,
         device,
+    )
+    logging.info(
+        "NOTE IDEA loss values are not comparable to DXMulE. The objectives differ."
     )
 
     if args.dataset == "Mutag":
@@ -492,7 +557,22 @@ def main():
                                     device = device,
                                     gt_mask = True,
                                     dataset = args.dataset,
-                                    fidelity_ratios = fidelity_ratios)
+                                    fidelity_ratios = fidelity_ratios,
+                                    auc_record_path = args.auc_record or None,
+                                    auc_meta = {
+                                        "dataset": args.dataset,
+                                        "seed": args.seed,
+                                        "protocol": {
+                                            "epochs": args.epochs,
+                                            "lr": args.lr,
+                                            "batch_size": args.batch_size,
+                                            "codebook_size": args.codebook_size,
+                                            "use_ckpt": args.use_ckpt,
+                                            "max_graphs": args.max_graphs,
+                                            "device": device,
+                                            "embedding_target": "current_batch",
+                                        },
+                                    })
     logging.info("Evaluate seconds: %.3f", time() - eval_started)
 
 if __name__ == '__main__':

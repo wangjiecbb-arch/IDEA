@@ -7,17 +7,29 @@ These checks do not load a dataset and do not measure explanation quality.
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 import unittest
 
 import torch
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_mean_pool
 
 from dxmule.cross_scale import CrossScalePrototypeLink, prototype_assignment
+from dxmule.embedding_target import unmasked_embedding_target
 from dxmule.fidelity import (
     FidelityAccumulator,
     edge_mask_affects_logits,
     graph_fidelity,
     score_hard_mask,
+)
+from dxmule.matched_auc import (
+    build_matched,
+    classify_graph_auc,
+    load_json,
+    summarize_matched_seeds,
+    write_auc_record,
 )
 from dxmule.scales import EdgeRetentionScales, edges_to_keep, hard_retention_mask
 
@@ -192,6 +204,197 @@ class FidelityTests(unittest.TestCase):
                 mask.new_zeros(0),
             )
         )
+
+
+def _graph_record(index, labels, scores):
+    record = classify_graph_auc(labels, scores)
+    record["index"] = index
+    return record
+
+
+def _payload(method, seed, graphs, max_graphs=None):
+    return {
+        "method": method,
+        "dataset": "Benzene",
+        "seed": seed,
+        "protocol": {"max_graphs": max_graphs},
+        "graphs": graphs,
+    }
+
+
+class MatchedAucTests(unittest.TestCase):
+    def test_constant_scores_are_flagged_and_not_given_auc(self):
+        record = classify_graph_auc([0, 1, 0, 1], [0.2, 0.2, 0.2, 0.2])
+        self.assertFalse(record["constant_label"])
+        self.assertTrue(record["constant_score"])
+        self.assertTrue(record["score_finite"])
+        self.assertIsNone(record["auc"])
+
+    def test_constant_labels_are_flagged(self):
+        record = classify_graph_auc([1, 1, 1], [0.1, 0.2, 0.9])
+        self.assertTrue(record["constant_label"])
+        self.assertIsNone(record["auc"])
+
+    def test_nonfinite_scores_are_not_constant_and_have_no_auc(self):
+        record = classify_graph_auc([0, 1], [0.1, float("nan")])
+        self.assertFalse(record["score_finite"])
+        self.assertFalse(record["constant_score"])
+        self.assertIsNone(record["auc"])
+
+    def test_mixed_graph_has_finite_auc(self):
+        record = classify_graph_auc([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9])
+        self.assertGreater(record["auc"], 0.5)
+        self.assertEqual(record["n_edges"], 4)
+
+    def test_shared_skip_keeps_the_same_graphs(self):
+        # 0 constant label, 1 both vary, 2 IDEA constant score, 3 DXMulE
+        # constant score, 4 both constant scores, 5 both vary.
+        idea_graphs = [
+            _graph_record(0, [0, 0], [0.1, 0.9]),
+            _graph_record(1, [0, 1], [0.1, 0.9]),
+            _graph_record(2, [0, 1], [0.4, 0.4]),
+            _graph_record(3, [0, 1], [0.2, 0.8]),
+            _graph_record(4, [0, 1], [0.3, 0.3]),
+            _graph_record(5, [1, 0], [0.2, 0.7]),
+        ]
+        dx_graphs = [
+            _graph_record(0, [0, 0], [0.2, 0.2]),
+            _graph_record(1, [0, 1], [0.2, 0.8]),
+            _graph_record(2, [0, 1], [0.1, 0.9]),
+            _graph_record(3, [0, 1], [0.5, 0.5]),
+            _graph_record(4, [0, 1], [0.6, 0.6]),
+            _graph_record(5, [1, 0], [0.1, 0.4]),
+        ]
+        result = build_matched(_payload("idea", 2025, idea_graphs), _payload("dxmule", 2025, dx_graphs))
+        self.assertEqual(result["n"], 2)
+        self.assertEqual(result["idea"]["n"], result["dxmule"]["n"])
+        self.assertEqual(result["skips"]["constant_label"], 1)
+        self.assertEqual(result["skips"]["idea_only_constant_score"], 1)
+        self.assertEqual(result["skips"]["dxmule_only_constant_score"], 1)
+        self.assertEqual(result["skips"]["both_constant_score"], 1)
+        self.assertEqual(result["inclusion"]["matched_n"], 2)
+        self.assertEqual(result["inclusion"]["idea_own_rule_n"], 5)
+        self.assertEqual(result["inclusion"]["dxmule_own_rule_n"], 3)
+        self.assertAlmostEqual(result["idea"]["mean"], float(np_mean([idea_graphs[1]["auc"], idea_graphs[5]["auc"]])))
+        self.assertAlmostEqual(result["dxmule"]["mean"], float(np_mean([dx_graphs[1]["auc"], dx_graphs[5]["auc"]])))
+
+    def test_label_disagreement_raises(self):
+        idea = [_graph_record(0, [0, 1], [0.1, 0.9])]
+        dx = [_graph_record(0, [0, 0], [0.1, 0.9])]
+        with self.assertRaises(ValueError):
+            build_matched(_payload("idea", 1, idea), _payload("dxmule", 1, dx))
+
+    def test_truncated_split_is_refused_when_required(self):
+        graphs = [_graph_record(0, [0, 1], [0.1, 0.9])]
+        idea = _payload("idea", 1, graphs, max_graphs=8)
+        dx = _payload("dxmule", 1, graphs, max_graphs=8)
+        with self.assertRaises(ValueError):
+            build_matched(idea, dx, require_full_split=True)
+
+    def test_summary_uses_per_seed_means_and_omits_std_for_one_seed(self):
+        one = build_matched(
+            _payload("idea", 2025, [
+                _graph_record(0, [0, 1], [0.1, 0.9]),
+                _graph_record(1, [1, 0], [0.2, 0.8]),
+            ]),
+            _payload("dxmule", 2025, [
+                _graph_record(0, [0, 1], [0.2, 0.7]),
+                _graph_record(1, [1, 0], [0.3, 0.9]),
+            ]),
+        )
+        alone = summarize_matched_seeds([one])
+        self.assertEqual(alone["n_seeds"], 1)
+        self.assertIsNone(alone["idea"]["std_ddof1"])
+        other = dict(one)
+        other["seed"] = 2026
+        other["idea"] = dict(one["idea"])
+        other["dxmule"] = dict(one["dxmule"])
+        other["idea"]["mean"] = one["idea"]["mean"] + 0.1
+        other["dxmule"]["mean"] = one["dxmule"]["mean"] + 0.2
+        both = summarize_matched_seeds([one, other])
+        self.assertEqual(both["n_seeds"], 2)
+        self.assertAlmostEqual(
+            both["idea"]["mean"],
+            0.5 * (one["idea"]["mean"] + other["idea"]["mean"]),
+        )
+        self.assertIsNotNone(both["idea"]["std_ddof1"])
+        self.assertEqual(both["per_seed_n"], [2, 2])
+
+    def test_record_roundtrip(self):
+        graphs = [_graph_record(0, [0, 1, 0], [0.2, 0.4, 0.9])]
+        payload = _payload("idea", 2025, graphs)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "idea.json")
+            write_auc_record(path, payload)
+            loaded = load_json(path)
+        self.assertEqual(loaded["seed"], 2025)
+        self.assertEqual(loaded["graphs"][0]["index"], 0)
+
+
+def np_mean(values):
+    return sum(values) / len(values)
+
+
+class EmbeddingTargetTests(unittest.TestCase):
+    def test_target_is_the_mean_of_the_current_batch(self):
+        class _FeatureEmbed(torch.nn.Module):
+            def embedding(self, x, edge_index, edge_weights=None):
+                return x
+
+        model = _FeatureEmbed()
+        x = torch.tensor([[1.0], [1.0], [3.0], [3.0]])
+        edge_index = torch.tensor([[0, 1, 2, 3], [1, 0, 3, 2]])
+        batch = torch.tensor([0, 0, 1, 1])
+        target = unmasked_embedding_target(model, x, edge_index, batch)
+        self.assertTrue(torch.allclose(target.view(-1), torch.tensor([1.0, 3.0])))
+
+    def test_cached_index_does_not_follow_a_different_batch(self):
+        class _FeatureEmbed(torch.nn.Module):
+            def embedding(self, x, edge_index, edge_weights=None):
+                return x
+
+        model = _FeatureEmbed()
+
+        def _batch(value):
+            x = torch.full((4, 1), float(value))
+            edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 0]])
+            batch = torch.tensor([0, 0, 1, 1])
+            return x, edge_index, batch
+
+        cached = unmasked_embedding_target(model, *_batch(1.0))
+        current = unmasked_embedding_target(model, *_batch(9.0))
+        self.assertTrue(torch.allclose(cached.view(-1), torch.tensor([1.0, 1.0])))
+        self.assertTrue(torch.allclose(current.view(-1), torch.tensor([9.0, 9.0])))
+        self.assertFalse(torch.allclose(cached, current))
+
+    def test_shuffled_loader_changes_batch_membership(self):
+        graphs = []
+        for i in range(32):
+            graphs.append(
+                Data(
+                    x=torch.full((2, 1), float(i)),
+                    edge_index=torch.tensor([[0, 1], [1, 0]]),
+                    y=torch.tensor([i]),
+                )
+            )
+        torch.manual_seed(2025)
+        loader = DataLoader(graphs, batch_size=8, shuffle=True)
+
+        def signature():
+            return [tuple(int(v) for v in batch.y.view(-1).tolist()) for batch in loader]
+
+        self.assertNotEqual(signature(), signature())
+
+    def test_entry_points_recompute_the_current_batch(self):
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(repo, "explainer", "eval_idea.py"), encoding="utf-8") as handle:
+            idea = handle.read()
+        with open(os.path.join(repo, "explainer", "eval_dxmule.py"), encoding="utf-8") as handle:
+            dx = handle.read()
+        self.assertIn("unmasked_embedding_target", idea)
+        self.assertIn("unmasked_embedding_target", dx)
+        self.assertNotIn("emd_targets", idea)
+        self.assertNotIn("global_mean_pool(full, data.batch)", dx)
 
 
 if __name__ == "__main__":

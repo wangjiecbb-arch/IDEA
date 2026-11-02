@@ -63,7 +63,7 @@ python -m dxmule.test_core
 
 **Hypothesis / TODO**
 
-- Whether C2, the shell, or the complement term improves ROC-AUC or fidelity over single-scale IDEA. A full-split Benzene run, when present, is recorded in `dxmule/FORMAL_COMPARE_Benzene.md` as HYPOTHESIS. It does not establish that one method is better.
+- Whether C2, the shell, or the complement term improves ROC-AUC or fidelity over single-scale IDEA. A full-split Benzene run, when present, is recorded in `dxmule/FORMAL_COMPARE_Benzene.md` as HYPOTHESIS. It does not establish that one method is better. Phase-2 (`dxmule/run_formal_benzene_phase2.sh`, report `dxmule/FORMAL_COMPARE_Benzene_Phase2.md`) recomputes IDEA's unmasked embedding target on the current batch and scores ROC-AUC on the intersection of graphs whose ground-truth edge mask and both explanation scores are non-constant. Those numbers are also HYPOTHESIS. The two training losses are different objectives and are not comparable.
 - Fidelity formulas other than the ACC@p / Fidelity+/-@p protocol in `dxmule/fidelity.py`. Complement-deletion curves beyond Fidelity+@p are not a separate sweep.
 - Multi-scale quantization inside HGTokenizer. Codebooks are still learned on the full graph.
 - Replacing the transport KL with a Sinkhorn loss on the same assignments.
