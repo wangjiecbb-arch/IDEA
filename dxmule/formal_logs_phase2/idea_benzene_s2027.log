@@ -1,0 +1,132 @@
+=== HOST ===
+2026-11-02T07:54:46Z
+Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Tue Oct 27 12:38:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+nproc 4
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi        10Gi       2.8Gi        17Mi       2.2Gi       4.8Gi
+Swap:             0B          0B          0B
+COMMIT 01e9252e4ceea507eb93828fed825445fd96aac3
+PYTHON /home/ubuntu/.venv/bin/python3
+PORCELAIN_START
+?? data/benzene_with_gt.pkl
+?? dxmule/formal_logs_phase2/
+PORCELAIN_END
+DEVICE_ARG -1
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4
+TQDM_DISABLE=1
+nvidia-smi not found
+torch 2.6.0+cpu
+cuda False
+cuda_count 0
+pyg 2.6.1
+numpy 1.26.4
+sklearn 1.6.1
+geomloss 0.2.6
+=== CMD ===
+python3 -u explainer/eval_idea.py --dataset Benzene --root_path ./ --device -1 --epochs 20 --lr 0.001 --batch_size 32 --seed 2027 --use_ckpt 1 --codebook_size 32 --fidelity_scales 0.1\,0.3\,0.5\,0.7\,0.9 --auc_record dxmule/formal_logs_phase2/idea_s2027_auc.json 
+=== RUN ===
+2026-11-02 07:54:51,172 - INFO - Using device: cpu
+2026-11-02 07:54:51,172 - INFO - PROTOCOL dataset=Benzene epochs=20 lr=0.001 batch_size=32 seed=2027 codebook_size=32 use_ckpt=1 max_graphs=None fidelity_scales=(0.1, 0.3, 0.5, 0.7, 0.9) device=cpu embedding_target=current_batch
+2026-11-02 07:54:51,172 - INFO - NOTE IDEA loss values are not comparable to DXMulE. The objectives differ.
+2026-11-02 07:54:54,825 - INFO - Loaded Benzene dataset with 12000 graphs, 14 features, 2 classes
+2026-11-02 07:54:54,825 - INFO - Training graphs: 8400, Testing graphs: 3600
+2026-11-02 07:54:54,852 - INFO - Loaded pretrained GNN from ./GNN/Benzene.pth
+2026-11-02 07:54:54,855 - INFO - Loading pretrained codebooks from ./codebook/
+2026-11-02 07:54:54,860 - INFO - IDEA unmasked embedding target is recomputed on the current batch each optimizer step (rows=32). A cached list indexed by DataLoader position is not used.
+2026-11-02 07:54:59,818 - INFO - Epoch 1/20- RQVAE Loss: 0.7181
+- Codebook Loss: 0.2932
+- Distribution Loss: 0.0015
+- Time: 4.96s
+2026-11-02 07:55:04,625 - INFO - Epoch 2/20- RQVAE Loss: 0.4332
+- Codebook Loss: 0.1697
+- Distribution Loss: 0.0009
+- Time: 9.77s
+2026-11-02 07:55:09,532 - INFO - Epoch 3/20- RQVAE Loss: 0.4126
+- Codebook Loss: 0.1602
+- Distribution Loss: 0.0009
+- Time: 14.68s
+2026-11-02 07:55:14,433 - INFO - Epoch 4/20- RQVAE Loss: 0.3898
+- Codebook Loss: 0.1500
+- Distribution Loss: 0.0011
+- Time: 19.58s
+2026-11-02 07:55:19,484 - INFO - Epoch 5/20- RQVAE Loss: 0.3673
+- Codebook Loss: 0.1398
+- Distribution Loss: 0.0013
+- Time: 24.63s
+2026-11-02 07:55:24,308 - INFO - Epoch 6/20- RQVAE Loss: 0.3580
+- Codebook Loss: 0.1360
+- Distribution Loss: 0.0014
+- Time: 29.45s
+2026-11-02 07:55:29,092 - INFO - Epoch 7/20- RQVAE Loss: 0.3581
+- Codebook Loss: 0.1355
+- Distribution Loss: 0.0012
+- Time: 34.24s
+2026-11-02 07:55:33,835 - INFO - Epoch 8/20- RQVAE Loss: 0.3566
+- Codebook Loss: 0.1344
+- Distribution Loss: 0.0012
+- Time: 38.98s
+2026-11-02 07:55:38,361 - INFO - Epoch 9/20- RQVAE Loss: 0.3487
+- Codebook Loss: 0.1317
+- Distribution Loss: 0.0012
+- Time: 43.51s
+2026-11-02 07:55:42,932 - INFO - Epoch 10/20- RQVAE Loss: 0.3388
+- Codebook Loss: 0.1274
+- Distribution Loss: 0.0010
+- Time: 48.08s
+2026-11-02 07:55:47,546 - INFO - Epoch 11/20- RQVAE Loss: 0.3305
+- Codebook Loss: 0.1235
+- Distribution Loss: 0.0008
+- Time: 52.69s
+2026-11-02 07:55:52,182 - INFO - Epoch 12/20- RQVAE Loss: 0.2739
+- Codebook Loss: 0.0985
+- Distribution Loss: 0.0005
+- Time: 57.33s
+2026-11-02 07:55:56,889 - INFO - Epoch 13/20- RQVAE Loss: 0.2342
+- Codebook Loss: 0.0809
+- Distribution Loss: 0.0004
+- Time: 62.03s
+2026-11-02 07:56:01,394 - INFO - Epoch 14/20- RQVAE Loss: 0.2371
+- Codebook Loss: 0.0820
+- Distribution Loss: 0.0004
+- Time: 66.54s
+2026-11-02 07:56:05,975 - INFO - Epoch 15/20- RQVAE Loss: 0.2364
+- Codebook Loss: 0.0817
+- Distribution Loss: 0.0004
+- Time: 71.12s
+2026-11-02 07:56:10,511 - INFO - Epoch 16/20- RQVAE Loss: 0.2343
+- Codebook Loss: 0.0808
+- Distribution Loss: 0.0004
+- Time: 75.66s
+2026-11-02 07:56:15,131 - INFO - Epoch 17/20- RQVAE Loss: 0.2267
+- Codebook Loss: 0.0783
+- Distribution Loss: 0.0004
+- Time: 80.27s
+2026-11-02 07:56:19,700 - INFO - Epoch 18/20- RQVAE Loss: 0.2400
+- Codebook Loss: 0.0833
+- Distribution Loss: 0.0004
+- Time: 84.84s
+2026-11-02 07:56:24,382 - INFO - Epoch 19/20- RQVAE Loss: 0.2317
+- Codebook Loss: 0.0800
+- Distribution Loss: 0.0004
+- Time: 89.53s
+2026-11-02 07:56:29,093 - INFO - Epoch 20/20- RQVAE Loss: 0.2339
+- Codebook Loss: 0.0809
+- Distribution Loss: 0.0003
+- Time: 94.24s
+2026-11-02 07:56:29,093 - INFO - Train loop seconds: 94.237 (unmasked embedding recomputed on each current batch)
+2026-11-02 07:56:29,101 - INFO - FIDELITY mask_sensitivity=True graph_index=0
+2026-11-02 07:57:19,459 - INFO - OWN-RULE ROC-AUC summary mean=0.203997 std_ddof0=0.179087 min=0.000000 max=0.944444 n=1838
+2026-11-02 07:57:19,459 - INFO - OWN-RULE skips constant labels only. constant_label=1762 constant_score_mixed_labels=5 nonfinite_scores=0 scored=1838
+2026-11-02 07:57:19,459 - INFO - OWN-RULE ROC-AUC is not the fair comparison. Matched-subset AUC is computed by dxmule.matched_auc from --auc_record.
+2026-11-02 07:57:19,477 - INFO - Wrote per-graph AUC record dxmule/formal_logs_phase2/idea_s2027_auc.json n=3600
+2026-11-02 07:57:19,477 - INFO - FIDELITY status=OK
+2026-11-02 07:57:19,477 - INFO - FIDELITY definition: ACC@p is the fraction of graphs whose frozen-GNN argmax on the hard top-p subgraph equals the unmasked argmax. Fidelity+@p (necessity) is the mean drop in softmax probability of that unmasked class when the hard top-p edges are removed. Fidelity-@p (sufficiency) is the mean drop when only the hard top-p edges are kept. Hard top-p keeps ceil(p * n_edges) edges, at least 1 if the graph has edges, ranked by the shared explanation score with a stable argsort, per graph. This is dxmule.scales.edges_to_keep. GCNConv self-loops are not part of the stored edge_index; the explain hook leaves those loop messages at weight 1. Ground-truth edge labels are not used. IDEA and DXMulE training objectives are different and are not fidelity.
+2026-11-02 07:57:19,477 - INFO - FIDELITY skipped_no_edges=0 skipped_nonfinite=0
+2026-11-02 07:57:19,477 - INFO - FIDELITY p=0.10 n=3600 acc=0.548889 fid_plus=0.059677 fid_minus=0.384369
+2026-11-02 07:57:19,477 - INFO - FIDELITY p=0.30 n=3600 acc=0.499444 fid_plus=0.146727 fid_minus=0.411053
+2026-11-02 07:57:19,477 - INFO - FIDELITY p=0.50 n=3600 acc=0.463889 fid_plus=0.278771 fid_minus=0.428842
+2026-11-02 07:57:19,477 - INFO - FIDELITY p=0.70 n=3600 acc=0.487778 fid_plus=0.462937 fid_minus=0.415565
+2026-11-02 07:57:19,477 - INFO - FIDELITY p=0.90 n=3600 acc=0.678333 fid_plus=0.386742 fid_minus=0.256164
+2026-11-02 07:57:19,478 - INFO - Evaluate seconds: 50.385
+ELAPSED_SEC 151.350
+EXIT 0

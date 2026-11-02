@@ -1,0 +1,81 @@
+=== HOST ===
+2026-11-02T07:33:53Z
+Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Tue Oct 27 12:38:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+nproc 4
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi        10Gi       2.9Gi        17Mi       2.2Gi       4.8Gi
+Swap:             0B          0B          0B
+COMMIT 01e9252e4ceea507eb93828fed825445fd96aac3
+PYTHON /home/ubuntu/.venv/bin/python3
+PORCELAIN_START
+?? data/benzene_with_gt.pkl
+?? dxmule/formal_logs_phase2/
+PORCELAIN_END
+DEVICE_ARG -1
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4
+TQDM_DISABLE=1
+nvidia-smi not found
+torch 2.6.0+cpu
+cuda False
+cuda_count 0
+pyg 2.6.1
+numpy 1.26.4
+sklearn 1.6.1
+geomloss 0.2.6
+=== CMD ===
+python3 -u explainer/eval_dxmule.py --dataset Benzene --root_path ./ --device -1 --epochs 20 --lr 0.001 --batch_size 32 --seed 2025 --use_ckpt 1 --codebook_size 32 --scales 0.1\,0.3\,0.5\,0.7\,0.9 --cross_scale_weight 0.1 --complement_weight 0.1 --shell_weight 0.1 --retention_temperature 1.0 --auc_record dxmule/formal_logs_phase2/dxmule_s2025_auc.json 
+=== RUN ===
+2026-11-02 07:33:58,074 - INFO - Device cpu root /workspace scales (0.1, 0.3, 0.5, 0.7, 0.9)
+2026-11-02 07:33:58,074 - INFO - PROTOCOL dataset=Benzene epochs=20 lr=0.001 batch_size=32 seed=2025 codebook_size=32 use_ckpt=1 max_graphs=None scales=(0.1, 0.3, 0.5, 0.7, 0.9) cross_scale_weight=0.1 complement_weight=0.1 shell_weight=0.1 retention_temperature=1.0 device=cpu embedding_target=current_batch
+2026-11-02 07:33:58,074 - INFO - NOTE DXMulE loss values are not comparable to IDEA. The objectives differ.
+2026-11-02 07:34:01,828 - INFO - Benzene graphs in this run: train 8400, test 3600, features 14, classes 2
+2026-11-02 07:34:01,859 - INFO - Loaded pretrained codebooks from /workspace/codebook
+2026-11-02 07:34:01,859 - INFO - DXMulE unmasked embedding target is recomputed on the current batch each optimizer step. A cached list indexed by DataLoader position is not used.
+2026-11-02 07:34:26,884 - INFO - Epoch 1/20 loss 0.8101 rv 0.7458 dist 0.0013 recon 0.3060 cross 0.1641 (topdown 0.0256 reverse 0.0282 shell 1.1028 persist 0.650) complement 0.4787
+2026-11-02 07:34:51,031 - INFO - Epoch 2/20 loss 0.6301 rv 0.5539 dist 0.0009 recon 0.2232 cross 0.2344 (topdown 0.0668 reverse 0.0763 shell 0.9127 persist 0.695) complement 0.5281
+2026-11-02 07:35:14,857 - INFO - Epoch 3/20 loss 0.5797 rv 0.4965 dist 0.0007 recon 0.1973 cross 0.2606 (topdown 0.0822 reverse 0.0949 shell 0.8338 persist 0.727) complement 0.5714
+2026-11-02 07:35:39,899 - INFO - Epoch 4/20 loss 0.5526 rv 0.4655 dist 0.0006 recon 0.1840 cross 0.2725 (topdown 0.0883 reverse 0.1021 shell 0.8212 persist 0.747) complement 0.5986
+2026-11-02 07:36:04,574 - INFO - Epoch 5/20 loss 0.5439 rv 0.4547 dist 0.0006 recon 0.1788 cross 0.2785 (topdown 0.0913 reverse 0.1057 shell 0.8148 persist 0.761) complement 0.6132
+2026-11-02 07:36:28,455 - INFO - Epoch 6/20 loss 0.5402 rv 0.4508 dist 0.0006 recon 0.1770 cross 0.2842 (topdown 0.0940 reverse 0.1074 shell 0.8277 persist 0.773) complement 0.6104
+2026-11-02 07:36:52,022 - INFO - Epoch 7/20 loss 0.5329 rv 0.4427 dist 0.0006 recon 0.1736 cross 0.2887 (topdown 0.0963 reverse 0.1102 shell 0.8218 persist 0.781) complement 0.6125
+2026-11-02 07:37:16,654 - INFO - Epoch 8/20 loss 0.5276 rv 0.4372 dist 0.0006 recon 0.1718 cross 0.2853 (topdown 0.0947 reverse 0.1094 shell 0.8113 persist 0.785) complement 0.6184
+2026-11-02 07:37:40,624 - INFO - Epoch 9/20 loss 0.5274 rv 0.4376 dist 0.0006 recon 0.1712 cross 0.2876 (topdown 0.0958 reverse 0.1101 shell 0.8170 persist 0.789) complement 0.6104
+2026-11-02 07:38:04,531 - INFO - Epoch 10/20 loss 0.5336 rv 0.4430 dist 0.0005 recon 0.1728 cross 0.2890 (topdown 0.0960 reverse 0.1105 shell 0.8245 persist 0.794) complement 0.6172
+2026-11-02 07:38:28,686 - INFO - Epoch 11/20 loss 0.5244 rv 0.4341 dist 0.0006 recon 0.1695 cross 0.2900 (topdown 0.0969 reverse 0.1106 shell 0.8251 persist 0.797) complement 0.6124
+2026-11-02 07:38:52,702 - INFO - Epoch 12/20 loss 0.5260 rv 0.4360 dist 0.0006 recon 0.1702 cross 0.2882 (topdown 0.0963 reverse 0.1106 shell 0.8129 persist 0.800) complement 0.6123
+2026-11-02 07:39:15,926 - INFO - Epoch 13/20 loss 0.5275 rv 0.4378 dist 0.0005 recon 0.1709 cross 0.2883 (topdown 0.0965 reverse 0.1103 shell 0.8146 persist 0.802) complement 0.6085
+2026-11-02 07:39:38,122 - INFO - Epoch 14/20 loss 0.5203 rv 0.4297 dist 0.0006 recon 0.1682 cross 0.2915 (topdown 0.0978 reverse 0.1108 shell 0.8291 persist 0.805) complement 0.6139
+2026-11-02 07:40:02,156 - INFO - Epoch 15/20 loss 0.5221 rv 0.4318 dist 0.0006 recon 0.1689 cross 0.2902 (topdown 0.0974 reverse 0.1112 shell 0.8158 persist 0.806) complement 0.6125
+2026-11-02 07:40:25,479 - INFO - Epoch 16/20 loss 0.5244 rv 0.4340 dist 0.0006 recon 0.1698 cross 0.2888 (topdown 0.0969 reverse 0.1106 shell 0.8142 persist 0.807) complement 0.6146
+2026-11-02 07:40:48,905 - INFO - Epoch 17/20 loss 0.5239 rv 0.4338 dist 0.0006 recon 0.1692 cross 0.2916 (topdown 0.0978 reverse 0.1118 shell 0.8212 persist 0.807) complement 0.6088
+2026-11-02 07:41:12,956 - INFO - Epoch 18/20 loss 0.5227 rv 0.4317 dist 0.0006 recon 0.1687 cross 0.2926 (topdown 0.0983 reverse 0.1123 shell 0.8203 persist 0.808) complement 0.6172
+2026-11-02 07:41:38,563 - INFO - Epoch 19/20 loss 0.5195 rv 0.4296 dist 0.0006 recon 0.1680 cross 0.2890 (topdown 0.0969 reverse 0.1114 shell 0.8072 persist 0.808) complement 0.6101
+2026-11-02 07:42:03,405 - INFO - Epoch 20/20 loss 0.5227 rv 0.4326 dist 0.0005 recon 0.1684 cross 0.2910 (topdown 0.0978 reverse 0.1127 shell 0.8048 persist 0.806) complement 0.6104
+2026-11-02 07:42:03,406 - INFO - Train loop seconds: 481.547
+2026-11-02 07:42:03,414 - INFO - FIDELITY mask_sensitivity=True graph_index=0
+2026-11-02 07:42:54,139 - INFO - Hard retention masks nested: True (n=3600 graphs). A violation raises before this line.
+2026-11-02 07:42:54,139 - INFO - OWN-RULE ROC-AUC summary mean=0.719092 std_ddof0=0.110779 min=0.494048 max=1.000000 n=1750
+2026-11-02 07:42:54,139 - INFO - OWN-RULE skips constant labels or constant scores. constant_label=1762 constant_score=88 nonfinite_scores=0 scored=1750
+2026-11-02 07:42:54,140 - INFO - OWN-RULE Shared-score ROC-AUC 0.7191 (n=1750). Soft masks reuse this ranking, so they are not scored separately. This n can differ from IDEA. Matched-subset AUC is computed by dxmule.matched_auc from --auc_record.
+2026-11-02 07:42:54,157 - INFO - Wrote per-graph AUC record dxmule/formal_logs_phase2/dxmule_s2025_auc.json n=3600
+2026-11-02 07:42:54,166 - INFO - Hard retention summary k=0.10 realized=0.110137 precision=0.389861 recall=0.320366 n_retention=3600 n_precision=3600 n_recall=1838
+2026-11-02 07:42:54,170 - INFO - Hard retention k=0.10 realized 0.110 precision 0.390 recall 0.320 (n=3600)
+2026-11-02 07:42:54,179 - INFO - Hard retention summary k=0.30 realized=0.309893 precision=0.346331 recall=0.797969 n_retention=3600 n_precision=3600 n_recall=1838
+2026-11-02 07:42:54,183 - INFO - Hard retention k=0.30 realized 0.310 precision 0.346 recall 0.798 (n=3600)
+2026-11-02 07:42:54,192 - INFO - Hard retention summary k=0.50 realized=0.500000 precision=0.256067 recall=0.952031 n_retention=3600 n_precision=3600 n_recall=1838
+2026-11-02 07:42:54,196 - INFO - Hard retention k=0.50 realized 0.500 precision 0.256 recall 0.952 (n=3600)
+2026-11-02 07:42:54,204 - INFO - Hard retention summary k=0.70 realized=0.709659 precision=0.188928 recall=0.995466 n_retention=3600 n_precision=3600 n_recall=1838
+2026-11-02 07:42:54,209 - INFO - Hard retention k=0.70 realized 0.710 precision 0.189 recall 0.995 (n=3600)
+2026-11-02 07:42:54,217 - INFO - Hard retention summary k=0.90 realized=0.909414 precision=0.148107 recall=0.999683 n_retention=3600 n_precision=3600 n_recall=1838
+2026-11-02 07:42:54,221 - INFO - Hard retention k=0.90 realized 0.909 precision 0.148 recall 1.000 (n=3600)
+2026-11-02 07:42:54,221 - INFO - FIDELITY status=OK
+2026-11-02 07:42:54,221 - INFO - FIDELITY definition: ACC@p is the fraction of graphs whose frozen-GNN argmax on the hard top-p subgraph equals the unmasked argmax. Fidelity+@p (necessity) is the mean drop in softmax probability of that unmasked class when the hard top-p edges are removed. Fidelity-@p (sufficiency) is the mean drop when only the hard top-p edges are kept. Hard top-p keeps ceil(p * n_edges) edges, at least 1 if the graph has edges, ranked by the shared explanation score with a stable argsort, per graph. This is dxmule.scales.edges_to_keep. GCNConv self-loops are not part of the stored edge_index; the explain hook leaves those loop messages at weight 1. Ground-truth edge labels are not used. IDEA and DXMulE training objectives are different and are not fidelity.
+2026-11-02 07:42:54,221 - INFO - FIDELITY skipped_no_edges=0 skipped_nonfinite=0
+2026-11-02 07:42:54,222 - INFO - FIDELITY p=0.10 n=3600 acc=0.552778 fid_plus=0.342024 fid_minus=0.400408
+2026-11-02 07:42:54,222 - INFO - FIDELITY p=0.30 n=3600 acc=0.614167 fid_plus=0.428658 fid_minus=0.321464
+2026-11-02 07:42:54,222 - INFO - FIDELITY p=0.50 n=3600 acc=0.757222 fid_plus=0.412226 fid_minus=0.190124
+2026-11-02 07:42:54,222 - INFO - FIDELITY p=0.70 n=3600 acc=0.853056 fid_plus=0.379671 fid_minus=0.098220
+2026-11-02 07:42:54,222 - INFO - FIDELITY p=0.90 n=3600 acc=0.924444 fid_plus=0.385782 fid_minus=0.040272
+2026-11-02 07:42:54,224 - INFO - Evaluate seconds: 50.818
+ELAPSED_SEC 538.972
+EXIT 0

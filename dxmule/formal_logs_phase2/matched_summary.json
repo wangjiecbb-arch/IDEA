@@ -1,0 +1,35 @@
+{
+  "aggregation": "unweighted_mean_of_per_seed_means",
+  "dxmule": {
+    "mean": 0.7137675093733197,
+    "n_seeds": 3,
+    "std_ddof1": 0.00611603109564295
+  },
+  "idea": {
+    "mean": 0.16794123112941653,
+    "n_seeds": 3,
+    "std_ddof1": 0.026857545638887023
+  },
+  "n_seeds": 3,
+  "note": "Across-seed std is the sample standard deviation (ddof=1) of the per-seed means. It is omitted when only one seed is present. Seeds are not pooled into one graph multiset. This is not a significance test and it is not a claim that one method is better.",
+  "per_seed_dxmule_mean": [
+    0.7190865185152102,
+    0.7151313047755601,
+    0.7070847048291888
+  ],
+  "per_seed_idea_mean": [
+    0.1658810527244648,
+    0.1421731019872015,
+    0.19576953867658328
+  ],
+  "per_seed_n": [
+    1745,
+    1736,
+    1729
+  ],
+  "seeds": [
+    2025,
+    2026,
+    2027
+  ]
+}
